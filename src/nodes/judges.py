@@ -1,9 +1,23 @@
-from langchain_core.prompts import ChatPromptTemplate
-from src.state import JudicialOpinion, AgentState
-from langchain_openai import ChatOpenAI
+"""
+Judicial Layer: Dialectical Bench with Lazy LLM Initialization
+LLMs are initialized only when nodes are invoked, not at import time.
+"""
 
-# Initialize LLM with Structured Output
-llm = ChatOpenAI(model="gpt-4o").with_structured_output(JudicialOpinion)
+from langchain_core.prompts import ChatPromptTemplate
+from src.state import JudicialOpinion, AgentState, Evidence
+from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+
+def get_llm():
+    """
+    Lazy LLM initialization.
+    Only creates ChatOpenAI instance when actually needed.
+    """
+    return ChatOpenAI(model="gpt-4o").with_structured_output(JudicialOpinion)
 
 
 def create_judge_node(persona: str, instruction: str):
@@ -14,6 +28,9 @@ def create_judge_node(persona: str, instruction: str):
         Judicial Protocol: Distinct Personas.
         Must return structured JudicialOpinion.
         """
+        # Initialize LLM lazily (inside function, not at module level)
+        llm = get_llm()
+        
         # Gather Evidence
         all_evidence = []
         for group in state.get("evidences", {}).values():
@@ -38,6 +55,7 @@ def create_judge_node(persona: str, instruction: str):
 
 
 # Instantiate Personas with Distinct Philosophies
+# Note: These are factory functions, LLM not initialized yet
 prosecutor_node = create_judge_node(
     "Prosecutor", 
     "Trust No One. Assume Vibe Coding. Scrutinize for security flaws and laziness."
