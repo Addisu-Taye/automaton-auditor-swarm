@@ -67,3 +67,5 @@ audit/*.jpg
 .pytest_cache/
 .coverage
 htmlcov/
+*.backup
+*.backup2
