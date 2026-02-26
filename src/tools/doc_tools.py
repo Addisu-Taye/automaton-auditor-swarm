@@ -361,27 +361,20 @@ def _get_path_context(content: str, path: str, context_chars: int = 100) -> str:
 def verify_claimed_paths(claimed_paths: List[str], repo_file_tree: List[str]) -> Dict[str, Any]:
     """
     Forensic Protocol: Cross-reference claimed paths against actual repo structure.
-    
-    Evidence Class: Report Accuracy (Protocol A.2)
-    Success Pattern: All claimed paths exist in repo
-    Failure Pattern: Hallucinated paths (claimed but don't exist)
-    
-    Args:
-        claimed_paths: List of file paths mentioned in PDF report
-        repo_file_tree: List of actual files in repository (from RepoInvestigator)
-        
-    Returns:
-        Dictionary containing verification results
+    Normalizes paths to forward slashes for reliable comparison.
     """
     verified = []
     hallucinated = []
     
+    # Normalize repo tree to forward slashes (if not already)
+    normalized_tree = [p.replace(os.sep, '/') for p in repo_file_tree]
+    
     for claimed in claimed_paths:
-        # Normalize paths for comparison
-        claimed_normalized = claimed.strip('/').lower()
+        # Normalize claimed path to forward slashes
+        claimed_normalized = claimed.strip('/').replace(os.sep, '/').lower()
         
         found = False
-        for actual in repo_file_tree:
+        for actual in normalized_tree:
             actual_normalized = actual.strip('/').lower()
             if claimed_normalized == actual_normalized or claimed_normalized in actual_normalized:
                 verified.append({
@@ -408,7 +401,6 @@ def verify_claimed_paths(claimed_paths: List[str], repo_file_tree: List[str]) ->
         "verified_paths": verified,
         "hallucinated_paths": hallucinated
     }
-
 
 # =============================================================================
 # THEORETICAL CONCEPT VERIFICATION

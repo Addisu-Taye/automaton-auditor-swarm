@@ -100,7 +100,7 @@ class AgentState(TypedDict):
     
     Uses Annotated reducers to handle parallel execution safely:
     - operator.ior: Dict merge for evidences (prevents overwrite)
-    - operator.add: List append for opinions (accumulates all views)
+    - operator.add: List append for opinions and errors (accumulates all values)
     
     Compliance: Protocol A.2 (State Management Rigor)
     """
@@ -122,7 +122,10 @@ class AgentState(TypedDict):
     ]
     
     # Final output
-    final_report: AuditReport
+    final_report: Optional[AuditReport]
     
-    # Error tracking
-    errors: List[str]
+    # Error tracking (List append reducer) - FIX: Added reducer for parallel writes
+    errors: Annotated[
+        List[str],
+        operator.add  # List append: accumulates errors from all parallel nodes
+    ]

@@ -252,6 +252,47 @@ def get_file_tree(repo_path: str, max_depth: int = 3) -> List[str]:
 def check_file_exists(repo_path: str, relative_path: str) -> bool:
     """
     Verify existence of claimed file path.
+    
+    Evidence Class: Report Accuracy (Protocol A.2)
+    Used for cross-referencing PDF claims against actual repo structure.
+    
+    Args:
+        repo_path: Path to cloned repository
+        relative_path: Relative path to verify (e.g., "src/state.py")
+        
+    Returns:
+        True if file exists, False otherwise
     """
+    # Normalize paths for cross-platform compatibility
+    repo_path = os.path.normpath(repo_path)
+    relative_path = os.path.normpath(relative_path)
+    
     full_path = os.path.join(repo_path, relative_path)
     return os.path.isfile(full_path)
+
+
+def get_file_tree(repo_path: str, max_depth: int = 3) -> List[str]:
+    """
+    Extract file tree structure for forensic inventory.
+    Returns paths with forward slashes for cross-platform comparison.
+    """
+    files = []
+    repo_path = os.path.normpath(repo_path)
+    
+    for root, dirs, filenames in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['__pycache__', 'venv', '.venv', 'node_modules']]
+        
+        depth = root.replace(repo_path, '').count(os.sep)
+        if depth >= max_depth:
+            dirs.clear()
+            continue
+        
+        for filename in filenames:
+            if not filename.startswith('.') and not filename.endswith('.pyc'):
+                full_path = os.path.join(root, filename)
+                rel_path = os.path.relpath(full_path, repo_path)
+                # Normalize to forward slashes for cross-platform comparison
+                rel_path = rel_path.replace(os.sep, '/')
+                files.append(rel_path)
+    
+    return sorted(files)
