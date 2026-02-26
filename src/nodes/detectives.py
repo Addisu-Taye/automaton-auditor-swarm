@@ -26,6 +26,7 @@ from src.tools.repo_tools import (
     clone_repo_sandboxed,
     extract_git_history,
     analyze_graph_structure,
+    verify_parallel_architecture,
     get_file_tree,
     check_file_exists
 )
@@ -191,17 +192,23 @@ def repo_investigator(state: AgentState) -> Dict[str, List[Evidence]]:
             ))
         
         # =========================================================================
-        # FORENSIC PROTOCOL 5: File Tree Inventory
+        # FORENSIC PROTOCOL 5: File Tree Inventory (FIXED: Cross-platform path matching)
         # =========================================================================
         file_tree = get_file_tree(temp_path, max_depth=4)
         
-        # Check for required files per interim spec
+        # Normalize paths to forward slashes for cross-platform exact matching
+        def _normalize_path(p: str) -> str:
+            return p.strip('/').replace(os.sep, '/').lower()
+        
+        normalized_tree = [_normalize_path(f) for f in file_tree]
+        
+        # Check for required files per interim spec using exact normalized matching
         required_files = {
-            "src/state.py": any("src/state.py" in f for f in file_tree),
-            "src/graph.py": any("src/graph.py" in f for f in file_tree),
-            "src/tools/repo_tools.py": any("src/tools/repo_tools.py" in f for f in file_tree),
-            "src/tools/doc_tools.py": any("src/tools/doc_tools.py" in f for f in file_tree),
-            "src/nodes/detectives.py": any("src/nodes/detectives.py" in f for f in file_tree),
+            "src/state.py": _normalize_path("src/state.py") in normalized_tree,
+            "src/graph.py": _normalize_path("src/graph.py") in normalized_tree,
+            "src/tools/repo_tools.py": _normalize_path("src/tools/repo_tools.py") in normalized_tree,
+            "src/tools/doc_tools.py": _normalize_path("src/tools/doc_tools.py") in normalized_tree,
+            "src/nodes/detectives.py": _normalize_path("src/nodes/detectives.py") in normalized_tree,
         }
         
         evidences.append(Evidence(
