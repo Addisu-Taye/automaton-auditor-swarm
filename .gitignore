@@ -69,3 +69,7 @@ audit/*.jpg
 htmlcov/
 *.backup
 *.backup2
+*.backup
+*.backup2
+__pycache__/
+*.pyc
