@@ -14,10 +14,9 @@ Compliance:
 - Protocol B: Judicial Sentencing Guidelines integration
 """
 
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.prebuilt import ToolNode
 
 from src.state import AgentState, Evidence, JudicialOpinion, AuditReport
 from src.nodes.detectives import (
@@ -29,10 +28,9 @@ from src.nodes.detectives import (
 from src.nodes.judges import (
     prosecutor_node,
     defense_node,
-    tech_lead_node,
-    get_all_judge_nodes
+    tech_lead_node
 )
-from src.nodes.justice import chief_justice_node, get_chief_justice_node
+from src.nodes.justice import chief_justice_node
 
 
 # =============================================================================
@@ -59,28 +57,10 @@ def route_after_detectives(state: AgentState) -> str:
         if isinstance(ev_list, list)
     )
     
-    if detective_evidence_count >= 3:  # Minimum threshold
+    if detective_evidence_count >= 3:
         return "judges_parallel"
     else:
         return "handle_missing_evidence"
-
-
-def route_after_judges(state: AgentState) -> str:
-    """
-    Conditional routing after Judicial layer.
-    
-    Routes to ChiefJustice if opinions collected.
-    Routes to error handler if judges failed.
-    """
-    opinions = state.get("opinions", [])
-    errors = state.get("errors", [])
-    
-    if len(opinions) >= 3:  # All three judges reported
-        return "chief_justice"
-    elif errors:
-        return "handle_judge_error"
-    else:
-        return "chief_justice"  # Proceed with partial opinions
 
 
 def handle_missing_evidence(state: AgentState) -> Dict[str, Any]:
@@ -104,34 +84,6 @@ def handle_missing_evidence(state: AgentState) -> Dict[str, Any]:
     
     return {
         "evidences": {"error_handler": [fallback_evidence]},
-        "errors": []  # Clear errors to allow continuation
-    }
-
-
-def handle_judge_error(state: AgentState) -> Dict[str, Any]:
-    """
-    Error handler for judge node failures.
-    
-    Generates fallback opinions and routes to ChiefJustice.
-    """
-    from src.state import JudicialOpinion
-    
-    errors = state.get("errors", [])
-    
-    # Create fallback opinions from each persona
-    fallback_opinions = [
-        JudicialOpinion(
-            judge=persona,
-            criterion_id="error",
-            score=3,
-            argument=f"Judge node encountered error: {errors}",
-            cited_evidence=[]
-        )
-        for persona in ["Prosecutor", "Defense", "TechLead"]
-    ]
-    
-    return {
-        "opinions": fallback_opinions,
         "errors": []
     }
 
@@ -145,30 +97,8 @@ def build_full_auditor_graph() -> CompiledStateGraph:
     Build and compile the complete Digital Courtroom StateGraph.
     
     Architecture Flow:
-    ```
-    START 
-      │
-      ▼
-    [Detectives Parallel Fan-Out]
-      ├── RepoInvestigator
-      ├── DocAnalyst
-      └── VisionInspector
-      │
-      ▼
-    EvidenceAggregator (Fan-In)
-      │
-      ▼
-    [Judges Parallel Fan-Out]
-      ├── Prosecutor
-      ├── Defense
-      └── TechLead
-      │
-      ▼
-    ChiefJustice (Synthesis Engine)
-      │
-      ▼
-    END (AuditReport in state.final_report)
-    ```
+    START -> [Detectives Parallel] -> EvidenceAggregator 
+           -> [Judges Parallel] -> ChiefJustice -> END
     
     Returns:
         Compiled LangGraph StateGraph ready for production execution
@@ -189,9 +119,9 @@ def build_full_auditor_graph() -> CompiledStateGraph:
     # LAYER 2: JUDICIAL NODES (Parallel Fan-Out)
     # =========================================================================
     
-    judge_nodes = get_all_judge_nodes()
-    for node_name, node_func in judge_nodes.items():
-        graph.add_node(node_name, node_func)
+    graph.add_node("prosecutor", prosecutor_node)
+    graph.add_node("defense", defense_node)
+    graph.add_node("tech_lead", tech_lead_node)
     
     # =========================================================================
     # LAYER 3: SYNTHESIS ENGINE
@@ -204,7 +134,6 @@ def build_full_auditor_graph() -> CompiledStateGraph:
     # =========================================================================
     
     graph.add_node("handle_missing_evidence", handle_missing_evidence)
-    graph.add_node("handle_judge_error", handle_judge_error)
     
     # =========================================================================
     # GRAPH WIRING: DETECTIVE LAYER
@@ -229,35 +158,35 @@ def build_full_auditor_graph() -> CompiledStateGraph:
         "evidence_aggregator",
         route_after_detectives,
         {
-            "judges_parallel": "prosecutor",  # Route to first judge (triggers parallel)
+            "judges_parallel": "prosecutor",
             "handle_missing_evidence": "handle_missing_evidence"
         }
     )
     
     # =========================================================================
-    # GRAPH WIRING: JUDICIAL LAYER
+    # GRAPH WIRING: JUDICIAL LAYER (Parallel Fan-Out)
     # =========================================================================
     
     # Fan-out: EvidenceAggregator triggers all three judges in parallel
-    # Note: LangGraph executes nodes in parallel when multiple edges exist from same source
+    graph.add_edge("evidence_aggregator", "prosecutor")
+    graph.add_edge("evidence_aggregator", "defense")
+    graph.add_edge("evidence_aggregator", "tech_lead")
+    
+    # Also wire error handler to judges (fallback path)
     graph.add_edge("handle_missing_evidence", "prosecutor")
     graph.add_edge("handle_missing_evidence", "defense")
     graph.add_edge("handle_missing_evidence", "tech_lead")
     
+    # Fan-in: All judges route to ChiefJustice
     graph.add_edge("prosecutor", "chief_justice")
     graph.add_edge("defense", "chief_justice")
     graph.add_edge("tech_lead", "chief_justice")
     
     # =========================================================================
-    # GRAPH WIRING: CONDITIONAL ROUTING AFTER JUDGES
+    # GRAPH WIRING: EXIT
     # =========================================================================
     
-    # All judges route to ChiefJustice (with error handling fallback)
-    graph.add_conditional_edges(
-        "chief_justice",
-        lambda s: "end",  # Always proceed to end after synthesis
-        {"end": END}
-    )
+    graph.add_edge("chief_justice", END)
     
     # =========================================================================
     # COMPILE WITH LANGSMITH TRACING
@@ -267,10 +196,6 @@ def build_full_auditor_graph() -> CompiledStateGraph:
     
     return app
 
-
-# =============================================================================
-# DETECTIVE-ONLY GRAPH (For Interim Testing)
-# =============================================================================
 
 def build_detective_graph() -> CompiledStateGraph:
     """
@@ -364,6 +289,42 @@ def run_full_audit(
     return result
 
 
+def run_detective_audit(
+    repo_url: str,
+    pdf_path: Optional[str] = None,
+    rubric_dimensions: Optional[List[Dict]] = None
+) -> Dict[str, Any]:
+    """
+    Execute Detective Layer audit against target repository.
+    
+    Args:
+        repo_url: GitHub repository URL to audit
+        pdf_path: Optional path to architectural report PDF
+        rubric_dimensions: Optional list of rubric dimensions from JSON
+        
+    Returns:
+        Dictionary containing aggregated evidence and metadata
+    """
+    # Build graph
+    app = build_detective_graph()
+    
+    # Initialize state
+    initial_state: AgentState = {
+        "repo_url": repo_url,
+        "pdf_path": pdf_path or "",
+        "rubric_dimensions": rubric_dimensions or [],
+        "evidences": {},
+        "opinions": [],
+        "final_report": None,
+        "errors": []
+    }
+    
+    # Execute graph
+    result = app.invoke(initial_state)
+    
+    return result
+
+
 # =============================================================================
 # CLI ENTRY POINT
 # =============================================================================
@@ -436,7 +397,6 @@ def main():
     
     try:
         if args.mode == "detective":
-            from src.graph import run_detective_audit
             result = run_detective_audit(
                 repo_url=args.repo_url,
                 pdf_path=args.pdf_path,
