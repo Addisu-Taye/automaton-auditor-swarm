@@ -1,78 +1,72 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { AuditForm } from "@/components/AuditForm"
-import { ResultsViewer } from "@/components/ResultsViewer"
+import { useState, useCallback, useEffect } from "react"
+import { AuditForm, type AuditSubmitData } from "@/components/AuditForm"
+import { ResultsViewer, type AuditResult } from "@/components/ResultsViewer"
+import { AlertCircle } from "lucide-react"
 
-// Type definition for audit submission
-type AuditSubmitData = {
-  repoUrl: string
-  pdfPath?: string
-  mode: "detective" | "full"
-}
-
-// Type definition for audit result
-type AuditResult = {
-  audit_id: string
-  overall_score: number
-  criteria_evaluated: number
-  executive_summary: string
-  criteria: Array<{
-    dimension_id: string
-    dimension_name: string
-    final_score: number
-    judge_opinions: Array<{
-      judge: string
-      score: number
-      argument: string
-    }>
-    remediation: string
-  }>
-  remediation_plan: string
-  report_markdown: string
-}
+// API Base URL - loaded from environment with fallback
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
 
 export default function Home() {
   const [auditId, setAuditId] = useState<string | null>(null)
   const [status, setStatus] = useState<"idle" | "processing" | "completed" | "error">("idle")
   const [result, setResult] = useState<AuditResult | null>(null)
+  const [errorDetails, setErrorDetails] = useState<string>("")
 
+  // Poll for audit results
   const pollForResults = useCallback(async (id: string) => {
     const interval = setInterval(async () => {
       try {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/audit/${id}`)
+        const response = await fetch(`${API_BASE_URL}/api/audit/${id}`)
         const data = await response.json()
         
         if (data.status === "completed") {
           clearInterval(interval)
           setStatus("completed")
-          setResult(data)
+          
+          // Map API response to AuditResult type
+          const mappedResult: AuditResult = {
+            audit_id: data.audit_id,
+            overall_score: data.final_report?.overall_score ?? data.overall_score ?? 0,
+            criteria_evaluated: data.final_report?.criteria_evaluated ?? data.criteria_evaluated ?? 0,
+            executive_summary: data.final_report?.executive_summary ?? data.executive_summary ?? "",
+            criteria: data.final_report?.criteria ?? data.criteria ?? [],
+            remediation_plan: data.final_report?.remediation_plan ?? data.remediation_plan ?? "",
+            report_markdown: data.report_markdown ?? ""
+          }
+          
+          setResult(mappedResult)
         } else if (data.status === "failed") {
           clearInterval(interval)
           setStatus("error")
+          setErrorDetails(data.detail || "Audit failed")
         }
         // If still "processing", continue polling
       } catch (error) {
         console.error("Polling error:", error)
         clearInterval(interval)
         setStatus("error")
+        setErrorDetails(error instanceof Error ? error.message : "Polling failed")
       }
     }, 5000) // Poll every 5 seconds
     
     return () => clearInterval(interval)
   }, [])
 
-  const handleSubmit = async ({ repoUrl, pdfPath, mode }: AuditSubmitData) => {
+  // Handle form submission
+  const handleSubmit = useCallback(async (data: AuditSubmitData) => {
     setStatus("processing")
+    setErrorDetails("")
     
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/audit`, {
+      const response = await fetch(`${API_BASE_URL}/api/audit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          repo_url: repoUrl,
-          pdf_path: pdfPath,
-          mode: mode
+          repo_url: data.repoUrl,
+          pdf_path: data.pdfPath,
+          mode: data.mode
         })
       })
       
@@ -89,18 +83,22 @@ export default function Home() {
     } catch (error) {
       console.error("Submission error:", error)
       setStatus("error")
+      setErrorDetails(error instanceof Error ? error.message : "Unknown error")
     }
-  }
+  }, [pollForResults])
 
-  const handleNewAudit = () => {
+  // Handle new audit (reset state)
+  const handleNewAudit = useCallback(() => {
     setAuditId(null)
     setResult(null)
+    setErrorDetails("")
     setStatus("idle")
-  }
+  }, [])
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
       <div className="container mx-auto px-4 py-12">
+        {/* Header */}
         <header className="text-center mb-12">
           <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">
             ⚖️ Automaton Auditor Swarm
@@ -110,10 +108,12 @@ export default function Home() {
           </p>
         </header>
 
+        {/* Content based on status */}
         {status === "idle" || status === "error" ? (
           <AuditForm 
             onSubmit={handleSubmit} 
             error={status === "error"} 
+            errorDetails={errorDetails}
             onRetry={handleNewAudit}
           />
         ) : status === "processing" ? (
@@ -122,7 +122,9 @@ export default function Home() {
             <h2 className="text-2xl font-semibold text-white mb-2">Running Audit...</h2>
             <p className="text-slate-400">Analyzing repository with Detective + Judicial layers</p>
             {auditId && (
-              <p className="text-sm text-slate-500 mt-4">Audit ID: <code className="bg-slate-800 px-2 py-1 rounded">{auditId}</code></p>
+              <p className="text-sm text-slate-500 mt-4">
+                Audit ID: <code className="bg-slate-800 px-2 py-1 rounded">{auditId}</code>
+              </p>
             )}
           </div>
         ) : result ? (
