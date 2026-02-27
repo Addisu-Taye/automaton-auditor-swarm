@@ -1,425 +1,388 @@
 """
 src/nodes/justice.py
 
-Chief Justice Synthesis Engine: Deterministic Conflict Resolution
+Chief Justice Synthesis Engine
 Production Module - Automaton Auditor Swarm v3.0.0
 
-Deliberation Protocol (Hardcoded Rules):
-- Rule of Security: Vulnerabilities cap score at 3
-- Rule of Evidence: Facts overrule opinions
-- Rule of Functionality: Tech Lead carries highest weight
-- Dissent Requirement: Variance > 2 triggers explanation
-- Variance Re-evaluation: Specific evidence re-check
+Node:
+- ChiefJustice: Deterministic synthesis of judicial opinions into final report
 
 Compliance:
-- Protocol B: Judicial Sentencing Guidelines
-- Protocol A.5: Structured Output Enforcement
+- Protocol C.1: Deterministic Synthesis Rules (hardcoded Python logic)
+- Protocol C.2: Conflict Resolution (score variance handling)
+- Protocol C.3: Executive Reporting (structured Markdown output)
 """
 
 from typing import Dict, List, Any, Optional
-from src.state import (
-    AgentState, 
-    JudicialOpinion, 
-    CriterionResult, 
-    AuditReport,
-    Evidence
-)
-from dotenv import load_dotenv
+from datetime import datetime
+import re
 
-# Load environment variables
-load_dotenv()
+from src.state import JudicialOpinion, AgentState, Evidence
 
 
 # =============================================================================
-# SYNTHESIS RULES (Hardcoded Deterministic Logic)
+# CHIEF JUSTICE SYNTHESIS RULES (Deterministic Python Logic)
 # =============================================================================
 
 class SynthesisRules:
-    """
-    Hardcoded deterministic rules for conflict resolution.
-    Per spec: ChiefJustice must NOT be just another LLM prompt.
-    """
-    
-    SECURITY_OVERRIDE_CAP = 3
-    VARIANCE_THRESHOLD = 2
+    """Hardcoded rules for Chief Justice conflict resolution."""
     
     @staticmethod
-    def security_override(opinions: List[JudicialOpinion], evidence: List[Evidence]) -> Optional[int]:
+    def rule_of_security(prosecutor_score: int, security_evidence: List[str]) -> Optional[int]:
         """
-        Rule of Security: If Prosecutor identifies confirmed security vulnerability,
-        cap score at 3 regardless of Defense arguments.
-        
-        Args:
-            opinions: List of JudicialOpinion from all judges
-            evidence: List of Evidence from detectives
-            
-        Returns:
-            Cap score (3) if security flaw detected, None otherwise
+        Rule 1: Security Override
+        If Prosecutor identifies confirmed security vulnerability, cap score at 3.
         """
-        # Check for security-related keywords in Prosecutor's argument
-        prosecutor_opinions = [o for o in opinions if o.judge == "Prosecutor"]
+        security_keywords = ["security", "vulnerability", "injection", "auth", "credential", "exposure"]
+        has_security_issue = any(
+            kw in evidence.lower() 
+            for evidence in security_evidence 
+            for kw in security_keywords
+        )
         
-        security_keywords = [
-            "security", "vulnerability", "os.system", "injection",
-            "sandbox", "tempfile", "negligence", "unsafe"
-        ]
-        
-        for opinion in prosecutor_opinions:
-            argument_lower = opinion.argument.lower()
-            if any(kw in argument_lower for kw in security_keywords):
-                # Check if evidence supports security claim
-                for ev in evidence:
-                    if ev.found and any(kw in ev.content.lower() for kw in security_keywords if ev.content):
-                        return SynthesisRules.SECURITY_OVERRIDE_CAP
-        
+        if has_security_issue and prosecutor_score <= 2:
+            return min(3, prosecutor_score)
         return None
     
     @staticmethod
-    def fact_supremacy(opinions: List[JudicialOpinion], evidence: List[Evidence]) -> Dict[str, Any]:
+    def rule_of_evidence(defense_claim: str, repo_evidence: List[Evidence]) -> Optional[bool]:
         """
-        Rule of Evidence: Forensic evidence (facts from Detectives) always
-        overrules Judicial opinion (interpretation from Judges).
-        
-        Args:
-            opinions: List of JudicialOpinion from all judges
-            evidence: List of Evidence from detectives
-            
-        Returns:
-            Dictionary with overruled opinions and rationale
+        Rule 2: Fact Supremacy
+        If Defense claims feature exists but RepoInvestigator found no evidence, overrule Defense.
         """
-        overruled = []
+        # Extract claimed features from defense argument
+        claimed_features = re.findall(r'"([^"]+)"|\'([^\']+)\'', defense_claim)
+        claimed_features = [f[0] or f[1] for f in claimed_features]
         
-        for opinion in opinions:
-            # Check if opinion claims something that evidence contradicts
-            if opinion.judge == "Defense":
-                # Defense claims "Deep Metacognition" but no evidence found
-                if "metacognition" in opinion.argument.lower() or "effort" in opinion.argument.lower():
-                    supporting_evidence = [
-                        ev for ev in evidence 
-                        if ev.found and ev.goal == "theoretical_depth"
-                    ]
-                    if not supporting_evidence:
-                        overruled.append({
-                            "opinion": opinion,
-                            "reason": "Claim not supported by forensic evidence"
-                        })
-        
-        return {
-            "overruled": overruled,
-            "count": len(overruled)
-        }
+        # Check if any claimed feature is contradicted by repo evidence
+        for claim in claimed_features:
+            evidence_contradicts = any(
+                claim.lower() in e.content.lower() and not e.found
+                for e in repo_evidence
+            )
+            if evidence_contradicts:
+                return False  # Overrule defense claim
+        return None  # No contradiction found
     
     @staticmethod
-    def functionality_weight(opinions: List[JudicialOpinion]) -> Optional[JudicialOpinion]:
+    def rule_of_functionality(techlead_score: int, parallel_evidence: bool) -> int:
         """
-        Rule of Functionality: If Tech Lead confirms architecture is modular
-        and workable, this carries highest weight for Architecture criterion.
-        
-        Args:
-            opinions: List of JudicialOpinion from all judges
-            
-        Returns:
-            Tech Lead opinion if found, None otherwise
+        Rule 3: Functionality Weight
+        If TechLead confirms parallel architecture, boost architecture-related scores.
         """
-        tech_lead_opinions = [o for o in opinions if o.judge == "TechLead"]
-        return tech_lead_opinions[0] if tech_lead_opinions else None
+        if parallel_evidence and techlead_score >= 4:
+            return min(5, techlead_score + 1)
+        return techlead_score
     
     @staticmethod
-    def calculate_variance(opinions: List[JudicialOpinion]) -> float:
+    def rule_of_variance(scores: List[int], threshold: int = 2) -> bool:
         """
-        Calculate score variance between judges.
-        
-        Args:
-            opinions: List of JudicialOpinion
-            
-        Returns:
-            Variance (max - min score)
+        Rule 4: Dissent Detection
+        If score variance exceeds threshold, flag for re-evaluation.
         """
-        if not opinions:
-            return 0.0
-        
-        scores = [o.score for o in opinions]
-        return max(scores) - min(scores)
-    
-    @staticmethod
-    def requires_dissent(variance: float) -> bool:
-        """
-        Dissent Requirement: Variance > 2 triggers explanation.
-        
-        Args:
-            variance: Score variance between judges
-            
-        Returns:
-            True if dissent summary required
-        """
-        return variance > SynthesisRules.VARIANCE_THRESHOLD
+        if len(scores) < 2:
+            return False
+        return max(scores) - min(scores) > threshold
 
 
 # =============================================================================
 # CHIEF JUSTICE NODE
 # =============================================================================
 
-def chief_justice_node(state: AgentState) -> Dict[str, Any]:
+def chief_justice(state: AgentState) -> Dict[str, Any]:
     """
-    Chief Justice Synthesis Engine: Resolves dialectical conflict
-    and generates final AuditReport.
+    Synthesis Protocol: Chief Justice Final Report Generation.
     
-    This node uses HARDCODED DETERMINISTIC PYTHON LOGIC, not LLM averaging.
+    Aggregates judicial opinions using deterministic rules and generates
+    an executive-grade Markdown audit report.
+    
+    Deterministic Rules Applied:
+    1. Rule of Security: Security vulnerabilities cap scores at 3
+    2. Rule of Evidence: Factual evidence overrides optimistic claims
+    3. Rule of Functionality: Confirmed parallelism boosts architecture scores
+    4. Rule of Variance: Score divergence >2 triggers dissent summary
     
     Args:
-        state: AgentState with accumulated opinions and evidence
+        state: AgentState with 'opinions', 'evidences', 'rubric_dimensions'
         
     Returns:
-        AgentState with final_report populated
+        Dictionary with 'final_report' containing structured audit results
     """
-    # Gather all opinions from judges
-    opinions = state.get("opinions", [])
+    opinions = state.get("opinions", {})
+    evidences = state.get("evidences", {})
+    rubric_dimensions = state.get("rubric_dimensions", [])
+    repo_url = state.get("repo_url", "Unknown")
     
-    # Gather all evidence from detectives
-    all_evidence = []
-    for detective_name, evidence_list in state.get("evidences", {}).items():
-        if isinstance(evidence_list, list):
-            all_evidence.extend(evidence_list)
+    # Collect opinions by criterion
+    criteria_opinions: Dict[str, List[JudicialOpinion]] = {}
     
-    # Group opinions by criterion
-    opinions_by_criterion: Dict[str, List[JudicialOpinion]] = {}
-    for opinion in opinions:
-        criterion_id = opinion.criterion_id
-        if criterion_id not in opinions_by_criterion:
-            opinions_by_criterion[criterion_id] = []
-        opinions_by_criterion[criterion_id].append(opinion)
+    for judge_name, judge_opinions in opinions.items():
+        if judge_name == "aggregator":
+            continue
+        for opinion in judge_opinions:
+            cid = opinion.criterion_id
+            if cid not in criteria_opinions:
+                criteria_opinions[cid] = []
+            criteria_opinions[cid].append(opinion)
     
-    # Process each criterion
-    criteria_results: List[CriterionResult] = []
-    total_score = 0.0
-    criterion_count = 0
+    # Synthesize final scores and reports per criterion
+    final_criteria = []
+    overall_scores = []
     
-    # Rubric dimension names (for display)
-    dimension_names = {
-        "git_forensic_analysis": "Git Forensic Analysis",
-        "state_management_rigor": "State Management Rigor",
-        "graph_orchestration": "Graph Orchestration Architecture",
-        "safe_tool_engineering": "Safe Tool Engineering",
-        "structured_output_enforcement": "Structured Output Enforcement",
-        "judicial_nuance": "Judicial Nuance and Dialectics",
-        "chief_justice_synthesis": "Chief Justice Synthesis Engine",
-        "theoretical_depth": "Theoretical Depth (Documentation)",
-        "report_accuracy": "Report Accuracy (Cross-Reference)",
-        "swarm_visual": "Architectural Diagram Analysis"
-    }
-    
-    for criterion_id, criterion_opinions in opinions_by_criterion.items():
+    for dimension in rubric_dimensions:
+        cid = dimension.get("id")
+        cname = dimension.get("name")
+        
+        judge_ops = criteria_opinions.get(cid, [])
+        if not judge_ops:
+            continue
+        
+        # Extract scores and arguments
+        scores = [op.score for op in judge_ops]
+        arguments = {op.judge: op.argument for op in judge_ops}
+        cited = {op.judge: op.cited_evidence for op in judge_ops}
+        
         # Apply synthesis rules
-        scores = [o.score for o in criterion_opinions]
-        variance = SynthesisRules.calculate_variance(criterion_opinions)
-        
-        # Start with average score
-        final_score = sum(scores) / len(scores) if scores else 3.0
-        
-        # Rule 1: Security Override
-        security_cap = SynthesisRules.security_override(criterion_opinions, all_evidence)
-        if security_cap and final_score > security_cap:
-            final_score = security_cap
-        
-        # Rule 2: Functionality Weight (Tech Lead carries highest weight for architecture)
-        if criterion_id == "graph_orchestration":
-            tech_lead = SynthesisRules.functionality_weight(criterion_opinions)
-            if tech_lead:
-                # Weight Tech Lead opinion at 50%
-                other_scores = [o.score for o in criterion_opinions if o.judge != "TechLead"]
-                if other_scores:
-                    final_score = (tech_lead.score * 0.5) + (sum(other_scores) / len(other_scores) * 0.5)
-        
-        # Rule 3: Fact Supremacy (check for overruled opinions)
-        supremacy_check = SynthesisRules.fact_supremacy(criterion_opinions, all_evidence)
-        overruled_count = supremacy_check["count"]
-        
-        # Rule 4: Dissent Requirement
-        dissent_summary = None
-        if SynthesisRules.requires_dissent(variance):
-            # Generate dissent summary explaining the conflict
-            prosecutor_op = next((o for o in criterion_opinions if o.judge == "Prosecutor"), None)
-            defense_op = next((o for o in criterion_opinions if o.judge == "Defense"), None)
-            
-            if prosecutor_op and defense_op:
-                dissent_summary = (
-                    f"The Defense argued for {defense_op.argument[:100]}... "
-                    f"However, the Prosecutor noted {prosecutor_op.argument[:100]}... "
-                    f"Score variance ({variance}) exceeds threshold ({SynthesisRules.VARIANCE_THRESHOLD})."
-                )
-        
-        # Generate remediation based on lowest score
-        lowest_opinion = min(criterion_opinions, key=lambda o: o.score)
-        remediation = f"Address: {lowest_opinion.argument}. See cited evidence: {', '.join(lowest_opinion.cited_evidence[:3])}"
-        
-        # Create CriterionResult
-        result = CriterionResult(
-            dimension_id=criterion_id,
-            dimension_name=dimension_names.get(criterion_id, criterion_id),
-            final_score=int(round(final_score)),
-            judge_opinions=criterion_opinions,
-            dissent_summary=dissent_summary,
-            remediation=remediation
+        final_score = _apply_synthesis_rules(
+            scores, arguments, cited, evidences, cid
         )
+        overall_scores.append(final_score)
         
-        criteria_results.append(result)
-        total_score += final_score
-        criterion_count += 1
+        # Check for dissent
+        dissent_summary = None
+        if SynthesisRules.rule_of_variance(scores):
+            dissent_summary = _generate_dissent_summary(judge_ops)
+        
+        # Generate remediation
+        remediation = _generate_remediation(cname, final_score, judge_ops)
+        
+        final_criteria.append({
+            "dimension_id": cid,
+            "dimension_name": cname,
+            "final_score": final_score,
+            "judge_opinions": [op.model_dump() for op in judge_ops],
+            "dissent_summary": dissent_summary,
+            "remediation": remediation
+        })
     
-    # Calculate overall score
-    overall_score = total_score / criterion_count if criterion_count > 0 else 0.0
+    # Calculate overall score (weighted average)
+    overall_score = sum(overall_scores) / len(overall_scores) if overall_scores else 0
     
-    # Generate Executive Summary
-    executive_summary = _generate_executive_summary(criteria_results, overall_score, all_evidence)
+    # Generate executive summary
+    executive_summary = _generate_executive_summary(
+        overall_score, len(final_criteria), final_criteria
+    )
     
-    # Generate Remediation Plan
-    remediation_plan = _generate_remediation_plan(criteria_results)
+    # Generate prioritized remediation plan
+    remediation_plan = _generate_remediation_plan(final_criteria)
     
-    # Create AuditReport
-    audit_report = AuditReport(
-        repo_url=state.get("repo_url", "Unknown"),
+    # Generate full markdown report
+    report_markdown = _serialize_to_markdown(
+        repo_url=repo_url,
         executive_summary=executive_summary,
-        overall_score=round(overall_score, 2),
-        criteria=criteria_results,
+        overall_score=overall_score,
+        criteria=final_criteria,
         remediation_plan=remediation_plan
     )
     
-    # Serialize to Markdown
-    markdown_report = _serialize_to_markdown(audit_report)
-    
     return {
-        "final_report": audit_report,
-        "errors": []
+        "final_report": {
+            "repo_url": repo_url,
+            "executive_summary": executive_summary,
+            "overall_score": round(overall_score, 2),
+            "criteria_evaluated": len(final_criteria),
+            "criteria": final_criteria,
+            "remediation_plan": remediation_plan
+        },
+        "report_markdown": report_markdown
     }
 
 
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
+def _apply_synthesis_rules(
+    scores: List[int],
+    arguments: Dict[str, str],
+    cited: Dict[str, List[str]],
+    evidences: Dict[str, List[Evidence]],
+    criterion_id: str
+) -> int:
+    """Apply deterministic synthesis rules to determine final score."""
+    
+    # Start with median score (robust to outliers)
+    sorted_scores = sorted(scores)
+    n = len(sorted_scores)
+    if n % 2 == 0:
+        base_score = (sorted_scores[n//2 - 1] + sorted_scores[n//2]) // 2
+    else:
+        base_score = sorted_scores[n//2]
+    
+    # Rule 1: Security Override
+    security_evidence = cited.get("Prosecutor", [])
+    security_cap = SynthesisRules.rule_of_security(
+        arguments.get("Prosecutor", ""), 
+        security_evidence
+    )
+    if security_cap is not None:
+        base_score = min(base_score, security_cap)
+    
+    # Rule 2: Fact Supremacy (for report_accuracy criterion)
+    if criterion_id == "report_accuracy":
+        defense_claim = arguments.get("Defense", "")
+        repo_evidence = evidences.get("repo_investigator", [])
+        fact_check = SynthesisRules.rule_of_evidence(defense_claim, repo_evidence)
+        if fact_check is False:
+            # Reduce score if defense claim contradicted by evidence
+            base_score = max(1, base_score - 1)
+    
+    # Rule 3: Functionality Weight (for graph_orchestration)
+    if criterion_id == "graph_orchestration":
+        # Check if parallel evidence exists in repo_investigator
+        repo_evidence = evidences.get("repo_investigator", [])
+        parallel_evidence = any(
+            "Parallel: True" in e.content or "parallel_detected" in e.content.lower()
+            for e in repo_evidence
+        )
+        techlead_score = scores[criteria_opinions.index(arguments.get("TechLead", ""))] if "TechLead" in arguments else base_score
+        base_score = SynthesisRules.rule_of_functionality(base_score, parallel_evidence)
+    
+    # Rule 4: Variance-based adjustment (minor)
+    if SynthesisRules.rule_of_variance(scores):
+        # High variance suggests ambiguity; lean conservative
+        base_score = min(base_score, max(scores) - 1)
+    
+    return max(1, min(5, base_score))  # Clamp to 1-5
+
+
+def _generate_dissent_summary(opinions: List[JudicialOpinion]) -> str:
+    """Generate summary when judge scores diverge significantly."""
+    scores = {op.judge: op.score for op in opinions}
+    max_judge = max(scores, key=scores.get)
+    min_judge = min(scores, key=scores.get)
+    
+    return (
+        f"Significant dissent detected: {max_judge} scored {scores[max_judge]}/5 "
+        f"while {min_judge} scored {scores[min_judge]}/5. "
+        f"This {scores[max_judge] - scores[min_judge]}-point variance suggests "
+        f"ambiguous evidence or legitimate architectural trade-offs."
+    )
+
+
+def _generate_remediation(
+    criterion_name: str,
+    score: int,
+    opinions: List[JudicialOpinion]
+) -> str:
+    """Generate actionable remediation based on score and judge feedback."""
+    
+    if score >= 4:
+        return f"✅ {criterion_name} meets expectations. Consider documenting best practices for team reference."
+    elif score == 3:
+        return f"⚠️ {criterion_name} is adequate but has room for improvement. Review judge feedback for specific enhancements."
+    else:
+        # Extract common themes from low-scoring opinions
+        concerns = [
+            op.argument for op in opinions 
+            if op.score <= 2 and "missing" in op.argument.lower() or "lack" in op.argument.lower()
+        ]
+        if concerns:
+            return f"❌ Critical: {concerns[0][:200]}... Prioritize addressing this before production deployment."
+        return f"❌ {criterion_name} requires significant improvement. Review all judge opinions for remediation guidance."
+
 
 def _generate_executive_summary(
-    criteria: List[CriterionResult], 
     overall_score: float,
-    evidence: List[Evidence]
+    criteria_count: int,
+    criteria: List[Dict]
 ) -> str:
-    """
-    Generate executive summary based on criterion results.
-    """
-    # Count criteria by score range
-    excellent = sum(1 for c in criteria if c.final_score >= 5)
-    good = sum(1 for c in criteria if 3 <= c.final_score < 5)
-    needs_improvement = sum(1 for c in criteria if c.final_score < 3)
+    """Generate executive summary text."""
     
-    # Check for security issues
-    security_issues = any(
-        "security" in c.remediation.lower() or "vulnerability" in c.remediation.lower()
-        for c in criteria
+    # Count score distribution
+    excellent = sum(1 for c in criteria if c["final_score"] >= 5)
+    good = sum(1 for c in criteria if 3 <= c["final_score"] < 5)
+    needs_work = sum(1 for c in criteria if c["final_score"] < 3)
+    
+    # Determine priority message
+    if needs_work > 0:
+        priority = f"⚠️ SECURITY CONCERNS IDENTIFIED - Immediate remediation required." if any(
+            "security" in c["remediation"].lower() for c in criteria
+        ) else f"Priority: Address {needs_work} critical criteria before production deployment."
+    elif good > excellent:
+        priority = "Ready for staging with minor refinements."
+    else:
+        priority = "Production-ready with optional optimizations."
+    
+    return (
+        f"Overall Score: {overall_score:.2f}/5.0. Criteria Evaluated: {criteria_count}. "
+        f"Excellent (5): {excellent}, Good (3-4): {good}, Needs Improvement (1-2): {needs_work}. "
+        f"{priority}"
     )
-    
-    summary_parts = [
-        f"Overall Score: {overall_score}/5.0",
-        f"Criteria Evaluated: {len(criteria)}",
-        f"Excellent (5): {excellent}, Good (3-4): {good}, Needs Improvement (1-2): {needs_improvement}"
-    ]
-    
-    if security_issues:
-        summary_parts.append("⚠️ SECURITY CONCERNS IDENTIFIED - Immediate remediation required.")
-    
-    if needs_improvement > 0:
-        summary_parts.append(f"Priority: Address {needs_improvement} critical criteria before production deployment.")
-    
-    return ". ".join(summary_parts)
 
 
-def _generate_remediation_plan(criteria: List[CriterionResult]) -> str:
-    """
-    Generate prioritized remediation plan from criterion results.
-    """
-    # Sort by score (lowest first = highest priority)
-    sorted_criteria = sorted(criteria, key=lambda c: c.final_score)
+def _generate_remediation_plan(criteria: List[Dict]) -> str:
+    """Generate prioritized remediation plan in Markdown."""
     
-    plan_lines = ["# Prioritized Remediation Plan", ""]
+    # Sort by score ascending (lowest first = highest priority)
+    sorted_criteria = sorted(criteria, key=lambda c: c["final_score"])
     
-    for i, criterion in enumerate(sorted_criteria[:5], 1):  # Top 5 priorities
-        plan_lines.append(f"## Priority {i}: {criterion.dimension_name} (Score: {criterion.final_score}/5)")
-        plan_lines.append(f"**Issue:** {criterion.remediation}")
-        if criterion.dissent_summary:
-            plan_lines.append(f"**Dissent:** {criterion.dissent_summary}")
-        plan_lines.append("")
+    lines = ["# Prioritized Remediation Plan\n"]
     
-    return "\n".join(plan_lines)
-
-
-def _serialize_to_markdown(report: AuditReport) -> str:
-    """
-    Serialize AuditReport to Markdown format.
-    """
-    lines = [
-        f"# Audit Report: {report.repo_url}",
-        "",
-        "## Executive Summary",
-        report.executive_summary,
-        "",
-        f"**Overall Score:** {report.overall_score}/5.0",
-        "",
-        "## Criterion Breakdown",
-        ""
-    ]
+    for i, crit in enumerate(sorted_criteria[:5], 1):  # Top 5 priorities
+        score_emoji = "❌" if crit["final_score"] <= 2 else "⚠️" if crit["final_score"] <= 3 else "✅"
+        lines.append(f"## Priority {i}: {crit['dimension_name']} (Score: {crit['final_score']}/5)")
+        lines.append(f"{score_emoji} **Issue:** {crit['remediation']}\n")
     
-    for criterion in report.criteria:
-        lines.append(f"### {criterion.dimension_name}")
-        lines.append(f"**Final Score:** {criterion.final_score}/5")
-        lines.append("")
-        lines.append("**Judge Opinions:**")
-        lines.append("")
-        
-        for opinion in criterion.judge_opinions:
-            lines.append(f"- **{opinion.judge}** (Score: {opinion.score}): {opinion.argument}")
-            if opinion.cited_evidence:
-                lines.append(f"  - Cited: {', '.join(opinion.cited_evidence[:3])}")
-        
-        if criterion.dissent_summary:
-            lines.append("")
-            lines.append(f"**Dissent Summary:** {criterion.dissent_summary}")
-        
-        lines.append("")
-        lines.append(f"**Remediation:** {criterion.remediation}")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+    if len(criteria) > 5:
+        lines.append(f"*...and {len(criteria) - 5} additional criteria with lower priority*\n")
     
-    lines.append("## Remediation Plan")
-    lines.append("")
-    lines.append(report.remediation_plan)
+    lines.append("---\n*Remediation priorities based on: score severity, security impact, and production readiness*")
     
     return "\n".join(lines)
 
 
-# =============================================================================
-# UTILITY FUNCTIONS
-# =============================================================================
-
-def get_chief_justice_node() -> callable:
-    """
-    Returns the Chief Justice node for graph wiring.
-    """
-    return chief_justice_node
-
-
-def save_report_to_file(report: AuditReport, output_path: str) -> None:
-    """
-    Save AuditReport to Markdown file.
+def _serialize_to_markdown(
+    repo_url: str,
+    executive_summary: str,
+    overall_score: float,
+    criteria: List[Dict],
+    remediation_plan: str
+) -> str:
+    """Serialize final report to executive-grade Markdown."""
     
-    Args:
-        report: AuditReport object
-        output_path: Path to save Markdown file
-    """
-    import os
+    lines = [
+        f"# Audit Report: {repo_url}\n",
+        "## Executive Summary",
+        executive_summary,
+        "",
+        f"**Overall Score:** {overall_score:.2f}/5.0\n",
+        "## Criterion Breakdown\n"
+    ]
     
-    markdown_content = _serialize_to_markdown(report)
+    for crit in criteria:
+        lines.append(f"### {crit['dimension_name']}")
+        lines.append(f"**Final Score:** {crit['final_score']}/5\n")
+        lines.append("**Judge Opinions:**\n")
+        
+        for op in crit["judge_opinions"]:
+            lines.append(f"- **{op['judge']}** (Score: {op['score']}): {op['argument']}")
+            if op.get("cited_evidence"):
+                lines.append(f"  - Cited: {', '.join(op['cited_evidence'])}")
+            lines.append("")
+        
+        if crit.get("dissent_summary"):
+            lines.append(f"**Dissent Summary:** {crit['dissent_summary']}\n")
+        
+        lines.append(f"**Remediation:** {crit['remediation']}\n")
+        lines.append("---\n")
     
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    lines.append("## Remediation Plan\n")
+    lines.append(remediation_plan)
     
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(markdown_content)
+    # Add footer
+    lines.extend([
+        "",
+        "---",
+        f"*Report generated by Automaton Auditor Swarm v3.0.0*",
+        f"*Timestamp: {datetime.utcnow().isoformat()}Z*",
+        f"*Methodology: Dialectical synthesis via Prosecutor/Defense/TechLead personas*"
+    ])
+    
+    return "\n".join(lines)

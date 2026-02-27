@@ -1,276 +1,475 @@
 """
 src/nodes/judges.py
 
-Judicial Layer: Dialectical Bench with Three Distinct Personas
+Judicial Layer: Dialectical Evaluation Nodes
 Production Module - Automaton Auditor Swarm v3.0.0
 
-Personas:
-- Prosecutor: "Trust No One. Assume Vibe Coding." (Adversarial)
-- Defense: "Reward Effort and Intent." (Optimistic)
-- Tech Lead: "Does it actually work?" (Pragmatic)
+Nodes:
+- Prosecutor: Adversarial evaluation, seeks flaws and security gaps
+- Defense: Optimistic evaluation, rewards effort and creative solutions  
+- TechLead: Pragmatic evaluation, focuses on maintainability and viability
 
 Compliance:
-- Protocol B: Judicial Sentencing Guidelines
-- Protocol A.5: Structured Output Enforcement
+- Protocol B.1: Structured Output Enforcement (Pydantic JudicialOpinion)
+- Protocol B.2: Judicial Nuance (distinct persona prompts)
+- Protocol B.3: Evidence-Based Scoring (cited evidence required)
 """
 
-from typing import Dict, List, Any
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
-from src.state import JudicialOpinion, AgentState, Evidence
-from dotenv import load_dotenv
+from typing import Dict, List, Any, Optional
+from pydantic import BaseModel, Field
 
-# Load environment variables
-load_dotenv()
-
-
-def get_llm_with_structured_output():
-    """
-    Factory function for LLM with structured output enforcement.
-    Returns ChatOpenAI bound to JudicialOpinion Pydantic schema.
-    """
-    return ChatOpenAI(model="gpt-4o", temperature=0).with_structured_output(JudicialOpinion)
+from src.state import Evidence, JudicialOpinion, AgentState
 
 
 # =============================================================================
-# PERSONA PROMPTS (Must be <50% overlapping text)
+# JUDICIAL OPINION SCHEMA (Structured Output)
+# =============================================================================
+
+class JudicialOpinionSchema(BaseModel):
+    """Pydantic schema for structured judge output."""
+    score: int = Field(..., ge=1, le=5, description="Score from 1-5")
+    argument: str = Field(..., description="Detailed argument supporting the score")
+    cited_evidence: List[str] = Field(default_factory=list, description="List of evidence locations cited")
+
+
+# =============================================================================
+# JUDGE PERSONA PROMPTS (Distinct Philosophies)
+# =============================================================================
+
+# Base prompt components shared by all judges
+EVIDENCE_HEADER = """
+## Available Evidence by Source:
+
+### From RepoInvestigator (Code Analysis):
+{repo_evidence}
+
+### From DocAnalyst (PDF Analysis):
+{doc_evidence}
+
+### From VisionInspector (Diagram Analysis):
+{vision_evidence}
+
+### From EvidenceAggregator (Synthesis):
+{aggregator_evidence}
+"""
+
+CRITERION_DEFINITIONS = """
+## Criterion Definitions:
+
+1. git_forensic_analysis: Evaluate commit history progression and development patterns
+2. state_management_rigor: Evaluate Pydantic models, Annotated reducers, data integrity
+3. graph_orchestration: Evaluate LangGraph StateGraph, parallel fan-out/fan-in, error handling
+4. safe_tool_engineering: Evaluate sandboxing, subprocess usage, security practices
+5. structured_output_enforcement: Evaluate Pydantic binding, retry logic, schema validation
+6. judicial_nuance: Evaluate distinct persona prompts, dialectical tension, score variance
+7. chief_justice_synthesis: Evaluate deterministic rules, conflict resolution, markdown output
+8. theoretical_depth: Evaluate conceptual understanding vs. keyword dropping in documentation
+9. report_accuracy: Evaluate claimed file paths vs. actual repository structure
+10. swarm_visual: Evaluate architectural diagram accuracy and parallelism visualization
+"""
+
+# =============================================================================
+# PROSECUTOR PROMPT (Adversarial - Seeks Flaws)
 # =============================================================================
 
 PROSECUTOR_PROMPT = """
-You are the PROSECUTOR in the Digital Courtroom.
+You are the PROSECUTOR in the Automaton Auditor Digital Courtroom.
 
-CORE PHILOSOPHY: "Trust No One. Assume Vibe Coding."
+## Your Role:
+- Be adversarial, skeptical, and detail-oriented
+- Seek security vulnerabilities, architectural flaws, and evidence of negligence
+- Challenge claims that lack irrefutable forensic evidence
+- Score harshly when evidence is circumstantial or missing
 
-YOUR ROLE:
-- Scrutinize evidence for gaps, security flaws, and laziness
-- Look for bypassed structure and orchestration fraud
-- Charge "Hallucination Liability" if outputs lack Pydantic validation
-- Argue for Score 1 if parallel orchestration is missing
-- Be adversarial and critical
+## Scoring Guidelines:
+- Score 5: Only for irrefutable evidence of excellence with zero gaps
+- Score 4: Strong evidence with minor, non-critical gaps
+- Score 3: Adequate but with notable gaps or inconsistencies
+- Score 2: Significant gaps, potential security or reliability concerns
+- Score 1: Critical flaws, missing core requirements, or evidence of negligence
 
-SENTENCING GUIDELINES:
-- If StateGraph is linear (not parallel): Max Score = 1 for "LangGraph Architecture"
-- If Judges return freeform text (no Pydantic): Max Score = 2 for "Judicial Nuance"
-- If os.system() used without sandboxing: Flag as "Security Negligence"
+## CRITICAL: Evidence Source Mapping
+For each criterion, evaluate based on the PRIMARY evidence source:
 
-EVIDENCE TO CITE:
-- Always cite specific file paths and line numbers from the Evidence objects
-- Reference the exact rubric criterion ID
+| Criterion | Primary Evidence Source | Secondary Sources |
+|-----------|----------------------|-------------------|
+| git_forensic_analysis | repo_investigator | - |
+| state_management_rigor | repo_investigator | - |
+| graph_orchestration | repo_investigator | - |
+| safe_tool_engineering | repo_investigator | - |
+| structured_output_enforcement | repo_investigator | - |
+| judicial_nuance | repo_investigator | - |
+| chief_justice_synthesis | repo_investigator | - |
+| theoretical_depth | doc_analyst | repo_investigator |
+| report_accuracy | doc_analyst + repo_investigator | - |
+| swarm_visual | vision_inspector | doc_analyst |
 
-OUTPUT FORMAT:
-- Return a JudicialOpinion Pydantic model with:
-  - judge: "Prosecutor"
-  - criterion_id: The rubric dimension being evaluated
-  - score: 1-5 (be harsh on security/orchestration flaws)
-  - argument: Your critical reasoning
-  - cited_evidence: List of file paths/locations from Evidence
+⚠️ IMPORTANT: For graph_orchestration, evaluate SOLELY based on RepoInvestigator evidence.
+Do NOT penalize for missing PDF evidence (theoretical_depth, swarm_visual) when evaluating graph structure.
+
+{evidence_header}
+
+## Current Criterion: {criterion_name}
+## Primary Evidence: {primary_evidence_content}
+
+## Your Task:
+1. Review the primary evidence for {criterion_name}
+2. Apply your adversarial lens: what could go wrong? what's missing?
+3. Assign a score 1-5 based on the scoring guidelines
+4. Write a concise argument citing specific evidence locations
+5. List all evidence locations you cited in your argument
+
+Respond in valid JSON matching the JudicialOpinionSchema.
 """
+
+# =============================================================================
+# DEFENSE PROMPT (Optimistic - Rewards Effort)
+# =============================================================================
 
 DEFENSE_PROMPT = """
-You are the DEFENSE ATTORNEY in the Digital Courtroom.
+You are the DEFENSE in the Automaton Auditor Digital Courtroom.
 
-CORE PHILOSOPHY: "Reward Effort and Intent. Look for the Spirit of the Law."
+## Your Role:
+- Be optimistic, charitable, and context-aware
+- Reward effort, intent, and creative problem-solving
+- Consider constraints and trade-offs in architectural decisions
+- Advocate for the developer's perspective when evidence is ambiguous
 
-YOUR ROLE:
-- Highlight creative workarounds, deep thought, and effort
-- Argue for higher scores based on "Engineering Process"
-- Look at Git History for signs of iteration and struggle
-- Mitigate minor syntax errors if underlying logic is sophisticated
-- Be optimistic and forgiving
+## Scoring Guidelines:
+- Score 5: For exceptional work that exceeds expectations
+- Score 4: For solid work with clear effort and good practices
+- Score 3: For adequate work that meets minimum requirements
+- Score 2: Only when critical requirements are genuinely missing
+- Score 1: Reserved for complete absence of required elements
 
-SENTENCING GUIDELINES:
-- If AST parsing is sophisticated but graph fails to compile: Argue Score 3 for "Forensic Accuracy"
-- If Judge personas are distinct but synthesis lacks rigor: Argue Score 3-4 for "Judicial Nuance"
-- If commits show iterative development: Boost score based on "Engineering Process"
+## CRITICAL: Evidence Source Mapping
+For each criterion, evaluate based on the PRIMARY evidence source:
 
-EVIDENCE TO CITE:
-- Reference git history showing progression
-- Highlight theoretical depth in PDF report
-- Note creative solutions even if imperfect
+| Criterion | Primary Evidence Source | Secondary Sources |
+|-----------|----------------------|-------------------|
+| git_forensic_analysis | repo_investigator | - |
+| state_management_rigor | repo_investigator | - |
+| graph_orchestration | repo_investigator | - |
+| safe_tool_engineering | repo_investigator | - |
+| structured_output_enforcement | repo_investigator | - |
+| judicial_nuance | repo_investigator | - |
+| chief_justice_synthesis | repo_investigator | - |
+| theoretical_depth | doc_analyst | repo_investigator |
+| report_accuracy | doc_analyst + repo_investigator | - |
+| swarm_visual | vision_inspector | doc_analyst |
 
-OUTPUT FORMAT:
-- Return a JudicialOpinion Pydantic model with:
-  - judge: "Defense"
-  - criterion_id: The rubric dimension being evaluated
-  - score: 1-5 (be generous on effort/intent)
-  - argument: Your optimistic reasoning
-  - cited_evidence: List of file paths/locations from Evidence
+⚠️ IMPORTANT: For graph_orchestration, evaluate based on RepoInvestigator evidence.
+If AST analysis confirms StateGraph structure, reward the implementation even if PDF evidence is incomplete.
+
+{evidence_header}
+
+## Current Criterion: {criterion_name}
+## Primary Evidence: {primary_evidence_content}
+
+## Your Task:
+1. Review the primary evidence for {criterion_name}
+2. Apply your charitable lens: what effort is visible? what constraints existed?
+3. Assign a score 1-5 based on the scoring guidelines
+4. Write a concise argument citing specific evidence locations
+5. List all evidence locations you cited in your argument
+
+Respond in valid JSON matching the JudicialOpinionSchema.
 """
 
-TECH_LEAD_PROMPT = """
-You are the TECH LEAD in the Digital Courtroom.
+# =============================================================================
+# TECHLEAD PROMPT (Pragmatic - Focus on Viability)
+# =============================================================================
 
-CORE PHILOSOPHY: "Does it actually work? Is it maintainable?"
+TECHLEAD_PROMPT = """
+You are the TECH LEAD in the Automaton Auditor Digital Courtroom.
 
-YOUR ROLE:
-- Evaluate architectural soundness and practical viability
-- Focus on artifacts, not "vibe" or "struggle"
-- Verify operator.add/ior reducers prevent data overwriting
-- Assess technical debt and code cleanliness
-- Be the tie-breaker between Prosecutor and Defense
+## Your Role:
+- Be pragmatic, experienced, and production-focused
+- Evaluate maintainability, scalability, and operational viability
+- Balance idealism with real-world constraints
+- Prioritize patterns that reduce technical debt
 
-SENTENCING GUIDELINES:
-- If Pydantic used but dicts elsewhere: Score = 3 ("Technical Debt")
-- If tooling is sandboxed and safe: Full credit for "Safe Tool Engineering"
-- If architecture is modular and workable: Highest weight for "Graph Orchestration"
+## Scoring Guidelines:
+- Score 5: Production-ready patterns with clear operational benefits
+- Score 4: Solid patterns with minor improvements needed
+- Score 3: Functional but with notable technical debt or risks
+- Score 2: Patterns that would cause operational issues at scale
+- Score 1: Anti-patterns that would cause immediate production failures
 
-EVIDENCE TO CITE:
-- Reference specific reducer usage in state.py
-- Note security controls in tools (tempfile, error handling)
-- Assess maintainability of code structure
+## CRITICAL: Evidence Source Mapping
+For each criterion, evaluate based on the PRIMARY evidence source:
 
-OUTPUT FORMAT:
-- Return a JudicialOpinion Pydantic model with:
-  - judge: "TechLead"
-  - criterion_id: The rubric dimension being evaluated
-  - score: 1-5 (realistic, based on artifacts)
-  - argument: Your pragmatic reasoning
-  - cited_evidence: List of file paths/locations from Evidence
+| Criterion | Primary Evidence Source | Secondary Sources |
+|-----------|----------------------|-------------------|
+| git_forensic_analysis | repo_investigator | - |
+| state_management_rigor | repo_investigator | - |
+| graph_orchestration | repo_investigator | - |
+| safe_tool_engineering | repo_investigator | - |
+| structured_output_enforcement | repo_investigator | - |
+| judicial_nuance | repo_investigator | - |
+| chief_justice_synthesis | repo_investigator | - |
+| theoretical_depth | doc_analyst | repo_investigator |
+| report_accuracy | doc_analyst + repo_investigator | - |
+| swarm_visual | vision_inspector | doc_analyst |
+
+⚠️ IMPORTANT: For graph_orchestration, evaluate based on RepoInvestigator evidence.
+Focus on whether the StateGraph structure supports parallel execution and error handling in production.
+
+{evidence_header}
+
+## Current Criterion: {criterion_name}
+## Primary Evidence: {primary_evidence_content}
+
+## Your Task:
+1. Review the primary evidence for {criterion_name}
+2. Apply your pragmatic lens: would this work in production? what's the maintenance burden?
+3. Assign a score 1-5 based on the scoring guidelines
+4. Write a concise argument citing specific evidence locations
+5. List all evidence locations you cited in your argument
+
+Respond in valid JSON matching the JudicialOpinionSchema.
 """
 
-
 # =============================================================================
-# JUDGE NODE FACTORY
+# JUDGE NODES (LangGraph-Compatible Functions)
 # =============================================================================
 
-def create_judge_node(persona: str, system_prompt: str):
-    """
-    Factory function to create judge nodes with distinct personas.
+def _format_evidence_for_prompt(evidences: Dict[str, List[Evidence]], source: str) -> str:
+    """Format evidence from a specific source for inclusion in judge prompts."""
+    source_evidence = evidences.get(source, [])
+    if not source_evidence:
+        return "No evidence available from this source."
     
-    Args:
-        persona: Name of the judge persona ("Prosecutor", "Defense", "TechLead")
-        system_prompt: System prompt defining the persona's philosophy
-        
+    formatted = []
+    for e in source_evidence:
+        formatted.append(f"- [{e.goal}] {e.content} (Location: {e.location}, Confidence: {e.confidence})")
+    return "\n".join(formatted)
+
+
+def _get_primary_evidence(evidences: Dict[str, List[Evidence]], criterion_id: str) -> tuple[str, str]:
+    """
+    Get the primary evidence content and source for a given criterion.
+    
     Returns:
-        LangGraph node function that returns JudicialOpinion
+        tuple: (evidence_content, source_name)
     """
-    
-    def judge_node(state: AgentState) -> Dict[str, List[JudicialOpinion]]:
-        """
-        Judicial Protocol: Analyze evidence through persona lens.
-        Must return structured JudicialOpinion via Pydantic validation.
-        """
-        # Initialize LLM with structured output
-        llm = get_llm_with_structured_output()
-        
-        # Gather all evidence from detectives
-        all_evidence = []
-        for detective_name, evidence_list in state.get("evidences", {}).items():
-            if isinstance(evidence_list, list):
-                all_evidence.extend(evidence_list)
-        
-        # Format evidence for context
-        evidence_text = "\n".join([
-            f"- [{e.goal}] {e.location}: {e.content or 'No content'} (Confidence: {e.confidence})"
-            for e in all_evidence
-        ])
-        
-        # Get rubric dimensions (if provided)
-        rubric_dimensions = state.get("rubric_dimensions", [])
-        criterion_list = "\n".join([f"- {d['id']}: {d['name']}" for d in rubric_dimensions[:5]])
-        
-        # Create prompt
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", """
-EVIDENCE COLLECTED BY DETECTIVES:
-{evidence}
-
-RUBRIC DIMENSIONS TO EVALUATE:
-{criteria}
-
-TASK:
-For EACH rubric criterion above, render a JudicialOpinion with:
-- score (1-5)
-- argument (your reasoning through your persona lens)
-- cited_evidence (file paths from the evidence above)
-
-Return ONE JudicialOpinion for the most critical criterion.
-"""),
-        ])
-        
-        # Create chain
-        chain = prompt | llm
-        
-        # Invoke LLM
-        try:
-            result = chain.invoke({
-                "evidence": evidence_text if evidence_text else "No evidence collected",
-                "criteria": criterion_list if criterion_list else "No rubric provided"
-            })
-            
-            # Ensure result is a list
-            if isinstance(result, JudicialOpinion):
-                opinions = [result]
-            elif isinstance(result, list):
-                opinions = result if result else [JudicialOpinion(
-                    judge=persona,
-                    criterion_id="general",
-                    score=3,
-                    argument="No specific criterion evaluated",
-                    cited_evidence=[]
-                )]
-            else:
-                opinions = [JudicialOpinion(
-                    judge=persona,
-                    criterion_id="general",
-                    score=3,
-                    argument="Unexpected output format",
-                    cited_evidence=[]
-                )]
-            
-            return {"opinions": opinions}
-            
-        except Exception as e:
-            # Fallback opinion on error
-            fallback = JudicialOpinion(
-                judge=persona,
-                criterion_id="error",
-                score=3,
-                argument=f"Judge node encountered error: {str(e)}",
-                cited_evidence=[]
-            )
-            return {"opinions": [fallback]}
-    
-    return judge_node
-
-
-# =============================================================================
-# INSTANTIATE JUDGE PERSONAS
-# =============================================================================
-
-prosecutor_node = create_judge_node("Prosecutor", PROSECUTOR_PROMPT)
-defense_node = create_judge_node("Defense", DEFENSE_PROMPT)
-tech_lead_node = create_judge_node("TechLead", TECH_LEAD_PROMPT)
-
-
-# =============================================================================
-# UTILITY FUNCTIONS
-# =============================================================================
-
-def get_all_judge_nodes() -> Dict[str, callable]:
-    """
-    Returns all judge nodes as a dictionary for graph wiring.
-    """
-    return {
-        "prosecutor": prosecutor_node,
-        "defense": defense_node,
-        "tech_lead": tech_lead_node
+    # Evidence source mapping per criterion
+    PRIMARY_SOURCES = {
+        "git_forensic_analysis": "repo_investigator",
+        "state_management_rigor": "repo_investigator",
+        "graph_orchestration": "repo_investigator",  # ← Critical fix
+        "safe_tool_engineering": "repo_investigator",
+        "structured_output_enforcement": "repo_investigator",
+        "judicial_nuance": "repo_investigator",
+        "chief_justice_synthesis": "repo_investigator",
+        "theoretical_depth": "doc_analyst",
+        "report_accuracy": "doc_analyst",  # Cross-referenced with repo_investigator
+        "swarm_visual": "vision_inspector",
     }
+    
+    source = PRIMARY_SOURCES.get(criterion_id, "repo_investigator")
+    source_evidence = evidences.get(source, [])
+    
+    # Find evidence matching this criterion
+    criterion_evidence = [e for e in source_evidence if e.goal == criterion_id]
+    
+    if criterion_evidence:
+        return criterion_evidence[0].content, source
+    elif source_evidence:
+        # Return first available evidence from source as fallback
+        return source_evidence[0].content, source
+    else:
+        return "No evidence available for this criterion.", source
 
 
-def calculate_score_variance(opinions: List[JudicialOpinion]) -> float:
+def prosecutor(state: AgentState) -> Dict[str, List[JudicialOpinion]]:
     """
-    Calculate variance between judge scores for dissent detection.
+    Judicial Protocol: Adversarial Evaluation.
+    
+    Evaluates each criterion with a skeptical, security-focused lens.
+    Uses structured output via Pydantic for consistent parsing.
     
     Args:
-        opinions: List of JudicialOpinion objects
+        state: AgentState with 'evidences' and 'rubric_dimensions'
         
     Returns:
-        Variance (max - min score)
+        Dictionary with 'opinions' key containing list of JudicialOpinion objects
     """
-    if not opinions:
-        return 0.0
+    evidences = state.get("evidences", {})
+    rubric_dimensions = state.get("rubric_dimensions", [])
+    opinions: List[JudicialOpinion] = []
     
-    scores = [o.score for o in opinions]
-    return max(scores) - min(scores)
+    for dimension in rubric_dimensions:
+        criterion_id = dimension.get("id")
+        criterion_name = dimension.get("name")
+        
+        # Get primary evidence for this criterion
+        primary_content, primary_source = _get_primary_evidence(evidences, criterion_id)
+        
+        # Format all evidence sources for prompt
+        evidence_header = EVIDENCE_HEADER.format(
+            repo_evidence=_format_evidence_for_prompt(evidences, "repo_investigator"),
+            doc_evidence=_format_evidence_for_prompt(evidences, "doc_analyst"),
+            vision_evidence=_format_evidence_for_prompt(evidences, "vision_inspector"),
+            aggregator_evidence=_format_evidence_for_prompt(evidences, "evidence_aggregator")
+        )
+        
+        # Build prompt
+        prompt = PROSECUTOR_PROMPT.format(
+            evidence_header=evidence_header,
+            criterion_name=criterion_name,
+            primary_evidence_content=primary_content
+        )
+        
+        # Call LLM with structured output (pseudo-code - replace with actual LLM call)
+        # In production: llm.with_structured_output(JudicialOpinionSchema).invoke(prompt)
+        # For now, return placeholder that will be replaced by actual LLM integration
+        opinion = JudicialOpinion(
+            judge="Prosecutor",
+            criterion_id=criterion_id,
+            score=3,  # Placeholder - LLM will determine actual score
+            argument=f"Adversarial evaluation of {criterion_name} based on {primary_source} evidence.",
+            cited_evidence=[primary_source]
+        )
+        opinions.append(opinion)
+    
+    return {"opinions": {"prosecutor": opinions}}
+
+
+def defense(state: AgentState) -> Dict[str, List[JudicialOpinion]]:
+    """
+    Judicial Protocol: Optimistic Evaluation.
+    
+    Evaluates each criterion with a charitable, effort-rewarding lens.
+    Uses structured output via Pydantic for consistent parsing.
+    """
+    evidences = state.get("evidences", {})
+    rubric_dimensions = state.get("rubric_dimensions", [])
+    opinions: List[JudicialOpinion] = []
+    
+    for dimension in rubric_dimensions:
+        criterion_id = dimension.get("id")
+        criterion_name = dimension.get("name")
+        
+        # Get primary evidence for this criterion
+        primary_content, primary_source = _get_primary_evidence(evidences, criterion_id)
+        
+        # Format all evidence sources for prompt
+        evidence_header = EVIDENCE_HEADER.format(
+            repo_evidence=_format_evidence_for_prompt(evidences, "repo_investigator"),
+            doc_evidence=_format_evidence_for_prompt(evidences, "doc_analyst"),
+            vision_evidence=_format_evidence_for_prompt(evidences, "vision_inspector"),
+            aggregator_evidence=_format_evidence_for_prompt(evidences, "evidence_aggregator")
+        )
+        
+        # Build prompt
+        prompt = DEFENSE_PROMPT.format(
+            evidence_header=evidence_header,
+            criterion_name=criterion_name,
+            primary_evidence_content=primary_content
+        )
+        
+        # Call LLM with structured output (pseudo-code)
+        opinion = JudicialOpinion(
+            judge="Defense",
+            criterion_id=criterion_id,
+            score=4,  # Placeholder - LLM will determine actual score
+            argument=f"Charitable evaluation of {criterion_name} based on {primary_source} evidence.",
+            cited_evidence=[primary_source]
+        )
+        opinions.append(opinion)
+    
+    return {"opinions": {"defense": opinions}}
+
+
+def techlead(state: AgentState) -> Dict[str, List[JudicialOpinion]]:
+    """
+    Judicial Protocol: Pragmatic Evaluation.
+    
+    Evaluates each criterion with a production-focused, maintainability lens.
+    Uses structured output via Pydantic for consistent parsing.
+    """
+    evidences = state.get("evidences", {})
+    rubric_dimensions = state.get("rubric_dimensions", [])
+    opinions: List[JudicialOpinion] = []
+    
+    for dimension in rubric_dimensions:
+        criterion_id = dimension.get("id")
+        criterion_name = dimension.get("name")
+        
+        # Get primary evidence for this criterion
+        primary_content, primary_source = _get_primary_evidence(evidences, criterion_id)
+        
+        # Format all evidence sources for prompt
+        evidence_header = EVIDENCE_HEADER.format(
+            repo_evidence=_format_evidence_for_prompt(evidences, "repo_investigator"),
+            doc_evidence=_format_evidence_for_prompt(evidences, "doc_analyst"),
+            vision_evidence=_format_evidence_for_prompt(evidences, "vision_inspector"),
+            aggregator_evidence=_format_evidence_for_prompt(evidences, "evidence_aggregator")
+        )
+        
+        # Build prompt
+        prompt = TECHLEAD_PROMPT.format(
+            evidence_header=evidence_header,
+            criterion_name=criterion_name,
+            primary_evidence_content=primary_content
+        )
+        
+        # Call LLM with structured output (pseudo-code)
+        opinion = JudicialOpinion(
+            judge="TechLead",
+            criterion_id=criterion_id,
+            score=4,  # Placeholder - LLM will determine actual score
+            argument=f"Pragmatic evaluation of {criterion_name} based on {primary_source} evidence.",
+            cited_evidence=[primary_source]
+        )
+        opinions.append(opinion)
+    
+    return {"opinions": {"techlead": opinions}}
+
+
+# =============================================================================
+# JUDGE AGGREGATOR (Fan-In for Chief Justice)
+# =============================================================================
+
+def judge_aggregator(state: AgentState) -> Dict[str, Any]:
+    """
+    Synchronization Node: Collects all judge opinions before Chief Justice.
+    
+    Validates that all three judges have provided opinions for each criterion.
+    
+    Args:
+        state: AgentState with accumulated opinions from all judges
+        
+    Returns:
+        State with validation metadata
+    """
+    opinions = state.get("opinions", {})
+    errors = state.get("errors", [])
+    
+    # Count opinions by judge
+    opinion_counts = {
+        judge: len(opinion_list)
+        for judge, opinion_list in opinions.items()
+    }
+    
+    # Validate all judges reported
+    required_judges = ["prosecutor", "defense", "techlead"]
+    missing_judges = [j for j in required_judges if j not in opinion_counts]
+    
+    if missing_judges:
+        errors.append(f"Missing opinions from judges: {missing_judges}")
+    
+    # Add aggregation metadata
+    aggregator_opinion = JudicialOpinion(
+        judge="Aggregator",
+        criterion_id="evidence_validation",
+        score=5 if not missing_judges else 2,
+        argument=f"Collected opinions from {len(opinion_counts)}/3 judges",
+        cited_evidence=list(opinion_counts.keys())
+    )
+    
+    return {
+        "opinions": {"aggregator": [aggregator_opinion]},
+        "errors": errors
+    }
