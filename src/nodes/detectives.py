@@ -18,8 +18,10 @@ Compliance:
 
 import os
 import tempfile
+import glob
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+from pathlib import Path
 
 from src.state import Evidence, AgentState
 from src.tools.repo_tools import (
@@ -161,46 +163,96 @@ def repo_investigator(state: AgentState) -> Dict[str, List[Evidence]]:
                 ))
         
         # =========================================================================
-        # FORENSIC PROTOCOL 4: Graph Orchestration (Parallelism Check)
+        # FORENSIC PROTOCOL 4: Graph Orchestration (Robust File Detection)
         # =========================================================================
+        # Try multiple methods to find graph.py
         graph_file_path = os.path.join(temp_path, "src", "graph.py")
-        
+        graph_found = False
+        actual_graph_path = None
+
+        # Method 1: Direct path check
         if os.path.exists(graph_file_path):
-            graph_analysis = analyze_graph_structure(graph_file_path)
-            parallel_analysis = verify_parallel_architecture(graph_file_path)
+            graph_found = True
+            actual_graph_path = graph_file_path
+
+        # Method 2: Normalized path search in file tree
+        if not graph_found:
+            file_tree = get_file_tree(temp_path, max_depth=4)
+            normalized_tree = [f.replace(os.sep, "/").lower() for f in file_tree]
+            if "src/graph.py" in normalized_tree:
+                # Find the actual path
+                for f in file_tree:
+                    if f.replace(os.sep, "/").lower() == "src/graph.py":
+                        actual_graph_path = os.path.join(temp_path, f)
+                        graph_found = True
+                        break
+
+        # Method 3: Glob search as fallback
+        if not graph_found:
+            graph_files = glob.glob(os.path.join(temp_path, "**", "graph.py"), recursive=True)
+            if graph_files:
+                actual_graph_path = graph_files[0]
+                graph_found = True
+
+        # Now analyze the graph file if found
+        if graph_found and actual_graph_path:
+            graph_analysis = analyze_graph_structure(actual_graph_path)
+            parallel_analysis = verify_parallel_architecture(actual_graph_path)
+            
+            # Calculate relative path for display
+            rel_path = actual_graph_path.replace(temp_path, "").lstrip("/\\").replace("\\", "/")
             
             evidences.append(Evidence(
                 goal="graph_orchestration",
                 found=parallel_analysis.get("parallel_detected", False),
-                content=f"StateGraph found: {graph_analysis.get('found_state_graph')}. Parallel: {parallel_analysis.get('parallel_detected')}. Fan-out sources: {parallel_analysis.get('fan_out_sources', [])}",
-                location="src/graph.py",
+                content=f"StateGraph found: {graph_analysis.get('found_state_graph')}. "
+                        f"Parallel: {parallel_analysis.get('parallel_detected')}. "
+                        f"Fan-out sources: {parallel_analysis.get('fan_out_sources', [])}",
+                location=rel_path if rel_path else "src/graph.py",
                 rationale=parallel_analysis.get("rationale", "Unable to determine parallelism"),
-                confidence=0.9 if graph_analysis.get("success") else 0.5,
+                confidence=0.9 if graph_analysis.get("success") else 0.7,
                 artifact_type="ast_analysis"
             ))
         else:
             evidences.append(Evidence(
                 goal="graph_orchestration",
                 found=False,
-                content="graph.py not found",
+                content="graph.py not found after exhaustive search (direct + normalized + glob)",
                 location="src/",
-                rationale="Graph definition file not found",
-                confidence=0.2,
+                rationale="Graph definition file genuinely missing from repository",
+                confidence=0.9,  # High confidence in negative result
                 artifact_type="file_check"
             ))
         
         # =========================================================================
-        # FORENSIC PROTOCOL 5: File Tree Inventory (WORKAROUND FOR SUBMISSION)
+        # FORENSIC PROTOCOL 5: File Tree Inventory (Normalized Path Matching)
         # =========================================================================
-        # Using AST-based verification instead of string path matching to avoid 
-        # Windows path separator issues. Core files verified through AST parsing above.
+        file_tree = get_file_tree(temp_path, max_depth=4)
+
+        # Normalize all paths to forward slashes for cross-platform comparison
+        normalized_tree = [f.replace(os.sep, "/").lower() for f in file_tree]
+
+        # Required files per interim spec
+        required_files = {
+            "src/state.py": "src/state.py" in normalized_tree,
+            "src/graph.py": "src/graph.py" in normalized_tree,
+            "src/tools/repo_tools.py": "src/tools/repo_tools.py" in normalized_tree,
+            "src/tools/doc_tools.py": "src/tools/doc_tools.py" in normalized_tree,
+            "src/nodes/detectives.py": "src/nodes/detectives.py" in normalized_tree,
+        }
+
+        missing_files = [k for k, v in required_files.items() if not v]
+        found_count = sum(required_files.values())
+
         evidences.append(Evidence(
             goal="report_accuracy",
-            found=True,
-            content="File inventory: Core files (state.py, graph.py, tools/) verified via AST analysis and existence checks. Path matching refinement deferred for post-submission.",
+            found=found_count == len(required_files),
+            content=f"Required files present: {found_count}/{len(required_files)}. "
+                    f"Missing: {missing_files if missing_files else 'None'}",
             location="src/",
-            rationale="AST parsing confirmed Pydantic models, reducers, and graph structure; cross-platform path matching to be refined post-submission",
-            confidence=0.9,
+            rationale=f"Normalized path matching (forward slashes, lowercase). "
+                      f"File tree contains {len(file_tree)} files total.",
+            confidence=1.0 if found_count == len(required_files) else 0.7,
             artifact_type="file_inventory"
         ))
         
