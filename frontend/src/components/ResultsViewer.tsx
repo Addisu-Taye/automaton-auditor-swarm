@@ -54,9 +54,39 @@ interface ResultsViewerProps {
   onNewAudit: () => void
 }
 
+// Type guard to validate audit result
+function isValidAuditResult(result: any): result is AuditResult {
+  return (
+    result &&
+    typeof result.overall_score === "number" &&
+    Array.isArray(result.criteria) &&
+    typeof result.executive_summary === "string"
+  )
+}
+
 export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
   const [expandedCriteria, setExpandedCriteria] = useState<Set<string>>(new Set())
   const [activeTab, setActiveTab] = useState<"summary" | "breakdown" | "report">("summary")
+
+  // Validate result data
+  if (!isValidAuditResult(result)) {
+    return (
+      <Card className="bg-slate-800/50 border-slate-700">
+        <CardContent className="py-12 text-center">
+          <AlertCircle className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
+          <h3 className="text-xl font-semibold text-white mb-2">
+            Invalid Audit Result
+          </h3>
+          <p className="text-slate-400 mb-4">
+            The audit result data is incomplete or malformed.
+          </p>
+          <Button onClick={onNewAudit} variant="default" className="bg-purple-600 hover:bg-purple-700">
+            Start New Audit
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
 
   const toggleCriterion = (id: string) => {
     setExpandedCriteria(prev => {
@@ -98,7 +128,6 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      // Could add toast notification here
     } catch (err) {
       console.error("Failed to copy:", err)
     }
@@ -116,6 +145,10 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
     URL.revokeObjectURL(url)
   }
 
+  // Safe score access with defaults
+  const safeOverallScore = result.overall_score ?? 0
+  const safeCriteriaEvaluated = result.criteria_evaluated ?? 0
+
   return (
     <div className="space-y-6">
       {/* Header Actions */}
@@ -125,7 +158,7 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
             ID: {result.audit_id.slice(0, 8)}...
           </Badge>
           <Badge variant="secondary">
-            {result.criteria_evaluated} criteria evaluated
+            {safeCriteriaEvaluated} criteria evaluated
           </Badge>
         </div>
         <div className="flex gap-2">
@@ -167,7 +200,7 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
             Audit Summary
           </CardTitle>
           <CardDescription className="text-slate-400">
-            Overall assessment based on {result.criteria_evaluated} rubric dimensions
+            Overall assessment based on {safeCriteriaEvaluated} rubric dimensions
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -175,12 +208,13 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-slate-400">Overall Score</p>
-              <p className={`text-3xl font-bold ${getScoreColor(result.overall_score)}`}>
-                {result.overall_score.toFixed(2)}<span className="text-lg text-slate-500">/5.0</span>
+              <p className={`text-3xl font-bold ${getScoreColor(safeOverallScore)}`}>
+                {safeOverallScore.toFixed(2)}
+                <span className="text-lg text-slate-500">/5.0</span>
               </p>
             </div>
             <div className="text-right">
-              {getScoreBadge(Math.round(result.overall_score))}
+              {getScoreBadge(Math.round(safeOverallScore))}
             </div>
           </div>
 
@@ -188,10 +222,10 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-slate-400">Quality Score</span>
-              <span className="text-white font-medium">{Math.round(result.overall_score * 20)}%</span>
+              <span className="text-white font-medium">{Math.round(safeOverallScore * 20)}%</span>
             </div>
             <Progress 
-              value={result.overall_score * 20} 
+              value={safeOverallScore * 20} 
               className="h-2 bg-slate-700"
             />
           </div>
@@ -250,8 +284,8 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
                       {criterion.remediation}
                     </p>
                   </div>
-                  <Badge variant="outline" className={getScoreColor(criterion.final_score)}>
-                    {criterion.final_score}/5
+                  <Badge variant="outline" className={getScoreColor(criterion.final_score ?? 0)}>
+                    {(criterion.final_score ?? 0)}/5
                   </Badge>
                 </div>
               ))}
@@ -267,11 +301,46 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="prose prose-invert prose-sm max-w-none">
-                <ReactMarkdown className="text-slate-300">
-                  {result.remediation_plan.split('\n').slice(0, 8).join('\n')}
-                </ReactMarkdown>
-              </div>
+              <div className="prose prose-invert prose-sm max-w-none bg-slate-900/50 p-4 rounded-lg overflow-x-auto text-slate-300">
+  <ReactMarkdown
+    components={{
+      h1: ({ children }) => <h1 className="text-xl font-bold text-white mt-6 mb-3">{children}</h1>,
+      h2: ({ children }) => <h2 className="text-lg font-semibold text-white mt-5 mb-2">{children}</h2>,
+      h3: ({ children }) => <h3 className="text-base font-medium text-white mt-4 mb-2">{children}</h3>,
+      p: ({ children }) => <p className="text-slate-300 my-2 leading-relaxed">{children}</p>,
+      ul: ({ children }) => <ul className="list-disc list-inside text-slate-300 my-2 space-y-1">{children}</ul>,
+      ol: ({ children }) => <ol className="list-decimal list-inside text-slate-300 my-2 space-y-1">{children}</ol>,
+      li: ({ children }) => <li className="text-slate-300">{children}</li>,
+      code: ({ children, className }) => (
+        <code className={`bg-slate-800 px-1.5 py-0.5 rounded text-sm ${className || ''}`}>
+          {children}
+        </code>
+      ),
+      pre: ({ children }) => (
+        <pre className="bg-slate-900 p-3 rounded-lg overflow-x-auto my-3">
+          {children}
+        </pre>
+      ),
+      blockquote: ({ children }) => (
+        <blockquote className="border-l-4 border-purple-500 pl-4 italic text-slate-400 my-3">
+          {children}
+        </blockquote>
+      ),
+      a: ({ children, href }) => (
+        <a 
+          href={href} 
+          className="text-purple-400 hover:text-purple-300 underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {children}
+        </a>
+      ),
+    }}
+  >
+    {result.report_markdown}
+  </ReactMarkdown>
+</div>
               <Button 
                 variant="link" 
                 className="text-purple-400 p-0 h-auto mt-2"
@@ -298,19 +367,19 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
                     className="w-full p-4 flex items-center justify-between hover:bg-slate-700/50 transition-colors text-left"
                   >
                     <div className="flex items-center gap-3">
-                      <div className={`w-2 h-2 rounded-full ${getScoreColor(criterion.final_score)}`} />
+                      <div className={`w-2 h-2 rounded-full ${getScoreColor(criterion.final_score ?? 0)}`} />
                       <div>
                         <h4 className="font-medium text-white">
                           {criterion.dimension_name}
                         </h4>
                         <p className="text-xs text-slate-400">
-                          {criterion.judge_opinions.length} judge opinions
+                          {criterion.judge_opinions?.length ?? 0} judge opinions
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <Badge variant="outline" className={getScoreColor(criterion.final_score)}>
-                        {criterion.final_score}/5
+                      <Badge variant="outline" className={getScoreColor(criterion.final_score ?? 0)}>
+                        {(criterion.final_score ?? 0)}/5
                       </Badge>
                       {isExpanded ? (
                         <ChevronUp className="h-4 w-4 text-slate-400" />
@@ -325,7 +394,7 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
                       {/* Judge Opinions */}
                       <div className="space-y-3">
                         <h5 className="text-sm font-medium text-slate-300">Judge Opinions</h5>
-                        {criterion.judge_opinions.map((opinion, idx) => (
+                        {(criterion.judge_opinions || []).map((opinion, idx) => (
                           <div 
                             key={idx}
                             className="p-3 rounded-lg bg-slate-900/50 space-y-2"
@@ -338,7 +407,7 @@ export function ResultsViewer({ result, onNewAudit }: ResultsViewerProps) {
                                 </span>
                               </div>
                               <Badge variant="secondary" className="text-xs">
-                                Score: {opinion.score}/5
+                                Score: {(opinion.score ?? 0)}/5
                               </Badge>
                             </div>
                             <p className="text-slate-400 text-sm leading-relaxed">
