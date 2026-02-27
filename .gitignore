@@ -73,3 +73,5 @@ htmlcov/
 *.backup2
 __pycache__/
 *.pyc
+frontend/.env.local
+*.local
