@@ -13,12 +13,53 @@ Compliance:
 - Protocol B.1: Structured Output Enforcement (Pydantic JudicialOpinion)
 - Protocol B.2: Judicial Nuance (distinct persona prompts)
 - Protocol B.3: Evidence-Based Scoring (cited evidence required)
+- Protocol B.4: LangSmith Tracing for observability and debugging
 """
 
+import os
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+# LangChain imports for LLM and tracing
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+# Load environment variables (includes LangSmith config)
+load_dotenv()
 
 from src.state import Evidence, JudicialOpinion, AgentState
+
+
+# =============================================================================
+# LANGSMITH TRACING CONFIGURATION
+# =============================================================================
+
+# Ensure LangSmith tracing is enabled via environment variables
+# These should be set in .env file:
+# LANGCHAIN_TRACING_V2=true
+# LANGCHAIN_API_KEY=ls__your-api-key-here
+# LANGCHAIN_PROJECT=automaton-auditor-swarm
+# LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+
+def _get_llm_with_tracing():
+    """
+    Initialize ChatOpenAI with LangSmith tracing enabled.
+    
+    Tracing is automatically enabled when LANGCHAIN_TRACING_V2=true is set.
+    All LLM calls will be logged to LangSmith dashboard.
+    
+    Returns:
+        ChatOpenAI instance configured for tracing
+    """
+    return ChatOpenAI(
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        temperature=0.1,  # Low temperature for consistent evaluations
+        max_tokens=2000,
+        # Callbacks are auto-attached when tracing is enabled via env vars
+        # No need to explicitly pass callbacks list
+    )
 
 
 # =============================================================================
@@ -236,13 +277,80 @@ def _get_primary_evidence(evidences: Dict[str, List[Evidence]], criterion_id: st
     else:
         return "No evidence available for this criterion.", source
 
+def _invoke_judge_llm(prompt: str, judge_name: str, criterion_id: str) -> JudicialOpinion:
+    """
+    Invoke LLM for judge evaluation with LangSmith tracing.
+    
+    Tracing is automatically enabled when LANGCHAIN_TRACING_V2=true is set
+    in environment variables. No explicit context manager needed.
+    
+    Args:
+        prompt: Formatted prompt for the judge
+        judge_name: Name of the judge persona (for tracing metadata)
+        criterion_id: Rubric dimension being evaluated
+        
+    Returns:
+        JudicialOpinion with score, argument, and cited evidence
+    """
+    try:
+        # Initialize LLM - tracing auto-attached via env vars
+        llm = _get_llm_with_tracing()
+        
+        # Create structured output parser
+        parser = PydanticOutputParser(pydantic_object=JudicialOpinionSchema)
+        
+        # Create prompt template
+        chat_prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a judicial evaluator. Respond ONLY with valid JSON matching the schema."),
+            ("user", "{prompt}\n\n{format_instructions}")
+        ])
+        
+        # Format prompt with parser instructions
+        formatted_prompt = chat_prompt.format(
+            prompt=prompt,
+            format_instructions=parser.get_format_instructions()
+        )
+        
+        # Invoke LLM - tracing automatically enabled via LANGCHAIN_TRACING_V2=true
+        response = llm.invoke(formatted_prompt)
+        
+        # Parse structured output
+        parsed = parser.parse(response.content)
+        
+        # Convert to JudicialOpinion model
+        return JudicialOpinion(
+            judge=judge_name,
+            criterion_id=criterion_id,
+            score=parsed.score,
+            argument=parsed.argument,
+            cited_evidence=parsed.cited_evidence
+        )
+        
+    except Exception as e:
+        # Fallback opinion if LLM call fails
+        return JudicialOpinion(
+            judge=judge_name,
+            criterion_id=criterion_id,
+            score=3,
+            argument=f"LLM evaluation failed: {str(e)}. Using default neutral score.",
+            cited_evidence=["error_fallback"]
+        )
+
 
 # =============================================================================
-# JUDGE NODES (LangGraph-Compatible Functions)
+# JUDGE NODES (LangGraph-Compatible Functions with Tracing)
 # =============================================================================
 
 def prosecutor_node(state: AgentState) -> Dict[str, List[JudicialOpinion]]:
-    """Judicial Protocol: Adversarial Evaluation."""
+    """
+    Judicial Protocol: Adversarial Evaluation.
+    
+    Tracing: All LLM invocations are logged to LangSmith with:
+    - Prompt content
+    - Response content
+    - Token usage and latency
+    - Judge persona metadata
+    """
     evidences = state.get("evidences", {})
     rubric_dimensions = state.get("rubric_dimensions", [])
     opinions: List[JudicialOpinion] = []
@@ -265,21 +373,23 @@ def prosecutor_node(state: AgentState) -> Dict[str, List[JudicialOpinion]]:
             primary_evidence_content=primary_content
         )
         
-        # Placeholder opinion - replace with actual LLM call in production
-        opinion = JudicialOpinion(
-            judge="Prosecutor",
-            criterion_id=criterion_id,
-            score=3,
-            argument=f"Adversarial evaluation of {criterion_name} based on {primary_source} evidence.",
-            cited_evidence=[primary_source]
-        )
+        # Invoke LLM with tracing (replaces placeholder)
+        opinion = _invoke_judge_llm(prompt, "Prosecutor", criterion_id)
         opinions.append(opinion)
     
     return {"opinions": {"prosecutor": opinions}}
 
 
 def defense_node(state: AgentState) -> Dict[str, List[JudicialOpinion]]:
-    """Judicial Protocol: Optimistic Evaluation."""
+    """
+    Judicial Protocol: Optimistic Evaluation.
+    
+    Tracing: All LLM invocations are logged to LangSmith with:
+    - Prompt content
+    - Response content
+    - Token usage and latency
+    - Judge persona metadata
+    """
     evidences = state.get("evidences", {})
     rubric_dimensions = state.get("rubric_dimensions", [])
     opinions: List[JudicialOpinion] = []
@@ -302,20 +412,23 @@ def defense_node(state: AgentState) -> Dict[str, List[JudicialOpinion]]:
             primary_evidence_content=primary_content
         )
         
-        opinion = JudicialOpinion(
-            judge="Defense",
-            criterion_id=criterion_id,
-            score=4,
-            argument=f"Charitable evaluation of {criterion_name} based on {primary_source} evidence.",
-            cited_evidence=[primary_source]
-        )
+        # Invoke LLM with tracing (replaces placeholder)
+        opinion = _invoke_judge_llm(prompt, "Defense", criterion_id)
         opinions.append(opinion)
     
     return {"opinions": {"defense": opinions}}
 
 
-def tech_lead_node(state: AgentState) -> Dict[str, List[JudicialOpinion]]:  # ← Fixed: added underscore
-    """Judicial Protocol: Pragmatic Evaluation."""
+def tech_lead_node(state: AgentState) -> Dict[str, List[JudicialOpinion]]:
+    """
+    Judicial Protocol: Pragmatic Evaluation.
+    
+    Tracing: All LLM invocations are logged to LangSmith with:
+    - Prompt content
+    - Response content
+    - Token usage and latency
+    - Judge persona metadata
+    """
     evidences = state.get("evidences", {})
     rubric_dimensions = state.get("rubric_dimensions", [])
     opinions: List[JudicialOpinion] = []
@@ -332,26 +445,26 @@ def tech_lead_node(state: AgentState) -> Dict[str, List[JudicialOpinion]]:  # �
             aggregator_evidence=_format_evidence_for_prompt(evidences, "evidence_aggregator")
         )
         
-        prompt = TECH_LEAD_PROMPT.format(  # ← Fixed: use TECH_LEAD_PROMPT
+        prompt = TECH_LEAD_PROMPT.format(
             evidence_header=evidence_header,
             criterion_name=criterion_name,
             primary_evidence_content=primary_content
         )
         
-        opinion = JudicialOpinion(
-            judge="TechLead",
-            criterion_id=criterion_id,
-            score=4,
-            argument=f"Pragmatic evaluation of {criterion_name} based on {primary_source} evidence.",
-            cited_evidence=[primary_source]
-        )
+        # Invoke LLM with tracing (replaces placeholder)
+        opinion = _invoke_judge_llm(prompt, "TechLead", criterion_id)
         opinions.append(opinion)
     
-    return {"opinions": {"techlead": opinions}}  # ← Keep "techlead" as key for consistency
+    return {"opinions": {"techlead": opinions}}
 
 
 def judge_aggregator_node(state: AgentState) -> Dict[str, Any]:
-    """Synchronization Node: Collects all judge opinions before Chief Justice."""
+    """
+    Synchronization Node: Collects all judge opinions before Chief Justice.
+    
+    Note: This node does not invoke LLMs, so no tracing is needed.
+    It only aggregates existing opinions from judge nodes.
+    """
     opinions = state.get("opinions", {})
     errors = state.get("errors", [])
     

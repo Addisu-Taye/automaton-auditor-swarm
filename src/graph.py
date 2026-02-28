@@ -1,24 +1,22 @@
 """
-src/graph.py
-
-LangGraph StateGraph Orchestration - Complete Digital Courtroom
-Production Module - Automaton Auditor Swarm v3.0.0
-
-Architecture:
-- Layer 1: Detectives (Parallel Fan-Out) → EvidenceAggregator (Fan-In)
-- Layer 2: Judges (Parallel Fan-Out) → ChiefJustice (Fan-In) → END
-
-Compliance:
-- Protocol A.3: Graph Orchestration Architecture
-- Protocol A.2: State Management Rigor with typed reducers
-- Protocol B: Judicial Sentencing Guidelines integration
+src/graph.py - Main Graph Orchestration for Automaton Auditor Swarm
+Production Module v3.0.0
 """
 
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Any, Optional
-from langgraph.graph import StateGraph, END, START
-from langgraph.graph.state import CompiledStateGraph
 
-from src.state import AgentState, Evidence, JudicialOpinion, AuditReport
+# LangGraph imports
+from langgraph.graph import StateGraph, END, START
+from langgraph.checkpoint.memory import MemorySaver
+
+# Local imports
+from src.state import AgentState, Evidence, JudicialOpinion, AuditReport, create_initial_state
 from src.nodes.detectives import (
     repo_investigator,
     doc_analyst,
@@ -28,411 +26,164 @@ from src.nodes.detectives import (
 from src.nodes.judges import (
     prosecutor_node,
     defense_node,
-    tech_lead_node
+    tech_lead_node,
+    judge_aggregator_node
 )
 from src.nodes.justice import chief_justice_node
+from src.tools.repo_tools import load_rubric
 
 
-# =============================================================================
-# CONDITIONAL EDGE FUNCTIONS
-# =============================================================================
+def build_full_auditor_graph() -> StateGraph:
+    """Build the complete Automaton Auditor StateGraph."""
+    builder = StateGraph(AgentState)
+    
+    # Detective Layer (Parallel Fan-Out)
+    builder.add_node("repo_investigator", repo_investigator)
+    builder.add_node("doc_analyst", doc_analyst)
+    builder.add_node("vision_inspector", vision_inspector)
+    builder.add_edge(START, "repo_investigator")
+    builder.add_edge(START, "doc_analyst")
+    builder.add_edge(START, "vision_inspector")
+    
+    # Evidence Aggregation (Fan-In)
+    builder.add_node("evidence_aggregator", evidence_aggregator)
+    builder.add_edge("repo_investigator", "evidence_aggregator")
+    builder.add_edge("doc_analyst", "evidence_aggregator")
+    builder.add_edge("vision_inspector", "evidence_aggregator")
+    
+    # Judicial Layer (Parallel Fan-Out)
+    builder.add_node("prosecutor", prosecutor_node)
+    builder.add_node("defense", defense_node)
+    builder.add_node("techlead", tech_lead_node)
+    builder.add_edge("evidence_aggregator", "prosecutor")
+    builder.add_edge("evidence_aggregator", "defense")
+    builder.add_edge("evidence_aggregator", "techlead")
+    
+    # Judge Aggregation (Fan-In)
+    builder.add_node("judge_aggregator", judge_aggregator_node)
+    builder.add_edge("prosecutor", "judge_aggregator")
+    builder.add_edge("defense", "judge_aggregator")
+    builder.add_edge("techlead", "judge_aggregator")
+    
+    # Chief Justice Synthesis
+    builder.add_node("chief_justice", chief_justice_node)
+    builder.add_edge("judge_aggregator", "chief_justice")
+    builder.add_edge("chief_justice", END)
+    
+    # Compile with memory saver
+    memory = MemorySaver()
+    return builder.compile(checkpointer=memory)
 
-def route_after_detectives(state: AgentState) -> str:
-    """
-    Conditional routing after Detective layer.
-    
-    Routes to Judges if evidence collected successfully.
-    Routes to error handler if critical evidence missing.
-    """
-    errors = state.get("errors", [])
-    evidences = state.get("evidences", {})
-    
-    # Check for critical errors
-    if any("clone failed" in e.lower() or "git" in e.lower() for e in errors):
-        return "handle_missing_evidence"
-    
-    # Check if minimum evidence collected
-    detective_evidence_count = sum(
-        len(ev_list) for ev_list in evidences.values()
-        if isinstance(ev_list, list)
-    )
-    
-    if detective_evidence_count >= 3:
-        return "judges_parallel"
-    else:
-        return "handle_missing_evidence"
-
-
-def handle_missing_evidence(state: AgentState) -> Dict[str, Any]:
-    """
-    Error handler for missing detective evidence.
-    
-    Generates fallback evidence and routes to judges with warning.
-    """
-    errors = state.get("errors", [])
-    
-    # Create fallback evidence
-    fallback_evidence = Evidence(
-        goal="error_handling",
-        found=False,
-        content=f"Detective layer encountered errors: {errors}",
-        location="evidence_aggregator",
-        rationale="Fallback evidence generated due to collection failure",
-        confidence=0.3,
-        artifact_type="error"
-    )
-    
-    return {
-        "evidences": {"error_handler": [fallback_evidence]},
-        "errors": []
-    }
-
-
-# =============================================================================
-# GRAPH CONSTRUCTION
-# =============================================================================
-
-def build_full_auditor_graph() -> CompiledStateGraph:
-    """
-    Build and compile the complete Digital Courtroom StateGraph.
-    
-    Architecture Flow:
-    START -> [Detectives Parallel] -> EvidenceAggregator 
-           -> [Judges Parallel] -> ChiefJustice -> END
-    
-    Returns:
-        Compiled LangGraph StateGraph ready for production execution
-    """
-    # Initialize StateGraph with typed AgentState
-    graph = StateGraph(AgentState)
-    
-    # =========================================================================
-    # LAYER 1: DETECTIVE NODES (Parallel Fan-Out)
-    # =========================================================================
-    
-    graph.add_node("repo_investigator", repo_investigator)
-    graph.add_node("doc_analyst", doc_analyst)
-    graph.add_node("vision_inspector", vision_inspector)
-    graph.add_node("evidence_aggregator", evidence_aggregator)
-    
-    # =========================================================================
-    # LAYER 2: JUDICIAL NODES (Parallel Fan-Out)
-    # =========================================================================
-    
-    graph.add_node("prosecutor", prosecutor_node)
-    graph.add_node("defense", defense_node)
-    graph.add_node("tech_lead", tech_lead_node)
-    
-    # =========================================================================
-    # LAYER 3: SYNTHESIS ENGINE
-    # =========================================================================
-    
-    graph.add_node("chief_justice", chief_justice_node)
-    
-    # =========================================================================
-    # ERROR HANDLING NODES
-    # =========================================================================
-    
-    graph.add_node("handle_missing_evidence", handle_missing_evidence)
-    
-    # =========================================================================
-    # GRAPH WIRING: DETECTIVE LAYER
-    # =========================================================================
-    
-    # Entry point: Start with RepoInvestigator
-    graph.add_edge(START, "repo_investigator")
-    
-    # Fan-out: RepoInvestigator triggers parallel DocAnalyst and VisionInspector
-    graph.add_edge("repo_investigator", "doc_analyst")
-    graph.add_edge("repo_investigator", "vision_inspector")
-    
-    # Fan-in: All detectives synchronize at EvidenceAggregator
-    graph.add_edge("doc_analyst", "evidence_aggregator")
-    graph.add_edge("vision_inspector", "evidence_aggregator")
-    
-    # =========================================================================
-    # GRAPH WIRING: CONDITIONAL ROUTING AFTER DETECTIVES
-    # =========================================================================
-    
-    graph.add_conditional_edges(
-        "evidence_aggregator",
-        route_after_detectives,
-        {
-            "judges_parallel": "prosecutor",
-            "handle_missing_evidence": "handle_missing_evidence"
-        }
-    )
-    
-    # =========================================================================
-    # GRAPH WIRING: JUDICIAL LAYER (Parallel Fan-Out)
-    # =========================================================================
-    
-    # Fan-out: EvidenceAggregator triggers all three judges in parallel
-    graph.add_edge("evidence_aggregator", "prosecutor")
-    graph.add_edge("evidence_aggregator", "defense")
-    graph.add_edge("evidence_aggregator", "tech_lead")
-    
-    # Also wire error handler to judges (fallback path)
-    graph.add_edge("handle_missing_evidence", "prosecutor")
-    graph.add_edge("handle_missing_evidence", "defense")
-    graph.add_edge("handle_missing_evidence", "tech_lead")
-    
-    # Fan-in: All judges route to ChiefJustice
-    graph.add_edge("prosecutor", "chief_justice")
-    graph.add_edge("defense", "chief_justice")
-    graph.add_edge("tech_lead", "chief_justice")
-    
-    # =========================================================================
-    # GRAPH WIRING: EXIT
-    # =========================================================================
-    
-    graph.add_edge("chief_justice", END)
-    
-    # =========================================================================
-    # COMPILE WITH LANGSMITH TRACING
-    # =========================================================================
-    
-    app = graph.compile()
-    
-    return app
-
-
-def build_detective_graph() -> CompiledStateGraph:
-    """
-    Build Detective Layer only (for interim testing without Judges).
-    
-    Returns:
-        Compiled StateGraph with Detectives → EvidenceAggregator → END
-    """
-    graph = StateGraph(AgentState)
-    
-    # Add detective nodes
-    graph.add_node("repo_investigator", repo_investigator)
-    graph.add_node("doc_analyst", doc_analyst)
-    graph.add_node("vision_inspector", vision_inspector)
-    graph.add_node("evidence_aggregator", evidence_aggregator)
-    
-    # Wire detectives
-    graph.add_edge(START, "repo_investigator")
-    graph.add_edge("repo_investigator", "doc_analyst")
-    graph.add_edge("repo_investigator", "vision_inspector")
-    graph.add_edge("doc_analyst", "evidence_aggregator")
-    graph.add_edge("vision_inspector", "evidence_aggregator")
-    graph.add_edge("evidence_aggregator", END)
-    
-    return graph.compile()
-
-
-# =============================================================================
-# EXECUTION HELPERS
-# =============================================================================
 
 def run_full_audit(
     repo_url: str,
     pdf_path: Optional[str] = None,
     rubric_dimensions: Optional[List[Dict]] = None,
+    mode: str = "full",
     output_path: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Execute full Digital Courtroom audit against target repository.
+    """Execute a complete audit using the Automaton Auditor Swarm."""
     
-    Args:
-        repo_url: GitHub repository URL to audit
-        pdf_path: Optional path to architectural report PDF
-        rubric_dimensions: Optional list of rubric dimensions from JSON
-        output_path: Optional path to save Markdown report
-        
-    Returns:
-        Dictionary containing final audit report and metadata
-    """
-    from dotenv import load_dotenv
-    import os
-    import json
+    # Load default rubric if not provided
+    if rubric_dimensions is None:
+        rubric_path = Path(__file__).parent.parent / "rubric" / "week2_rubric.json"
+        rubric_dimensions = load_rubric(str(rubric_path))
     
-    # Load environment variables
-    load_dotenv()
+    # Create initial state
+    initial_state = create_initial_state(
+        repo_url=repo_url,
+        pdf_path=pdf_path,
+        rubric_dimensions=rubric_dimensions,
+        mode=mode,
+        output_path=output_path
+    )
     
-    # Build graph
-    app = build_full_auditor_graph()
-    
-    # Load rubric if path provided
-    if not rubric_dimensions:
-        rubric_path = os.path.join("rubric", "week2_rubric.json")
-        if os.path.exists(rubric_path):
-            with open(rubric_path, "r", encoding="utf-8") as f:
-                rubric_data = json.load(f)
-                rubric_dimensions = rubric_data.get("dimensions", [])
-    
-    # Initialize state
-    initial_state: AgentState = {
-        "repo_url": repo_url,
-        "pdf_path": pdf_path or "",
-        "rubric_dimensions": rubric_dimensions or [],
-        "evidences": {},
-        "opinions": [],
-        "final_report": None,
-        "errors": []
-    }
+    # Build and compile graph
+    graph = build_full_auditor_graph()
     
     # Execute graph
-    result = app.invoke(initial_state)
+    config = {"configurable": {"thread_id": f"audit_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"}}
     
-    # Save report to file if path provided
-    if output_path and result.get("final_report"):
-        from src.nodes.justice import _serialize_to_markdown
-        markdown_content = _serialize_to_markdown(result["final_report"])
-        
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(markdown_content)
+    # Invoke graph - tracing auto-enabled via LANGCHAIN_TRACING_V2 env var
+    result = graph.invoke(initial_state, config=config)
+    
+    # Save report to file if output_path specified
+    if output_path and result.get("report_markdown"):
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(result["report_markdown"])
     
     return result
 
-
-def run_detective_audit(
-    repo_url: str,
-    pdf_path: Optional[str] = None,
-    rubric_dimensions: Optional[List[Dict]] = None
-) -> Dict[str, Any]:
-    """
-    Execute Detective Layer audit against target repository.
-    
-    Args:
-        repo_url: GitHub repository URL to audit
-        pdf_path: Optional path to architectural report PDF
-        rubric_dimensions: Optional list of rubric dimensions from JSON
-        
-    Returns:
-        Dictionary containing aggregated evidence and metadata
-    """
-    # Build graph
-    app = build_detective_graph()
-    
-    # Initialize state
-    initial_state: AgentState = {
-        "repo_url": repo_url,
-        "pdf_path": pdf_path or "",
-        "rubric_dimensions": rubric_dimensions or [],
-        "evidences": {},
-        "opinions": [],
-        "final_report": None,
-        "errors": []
-    }
-    
-    # Execute graph
-    result = app.invoke(initial_state)
-    
-    return result
-
-
-# =============================================================================
-# CLI ENTRY POINT
-# =============================================================================
 
 def main():
-    """
-    Production entry point for Automaton Auditor Swarm.
-    
-    Usage:
-        python src/graph.py --repo-url <URL> --pdf-path <PATH> --mode full
-    """
-    import argparse
-    from dotenv import load_dotenv
-    import os
-    import sys
-    
-    # Load environment variables
-    load_dotenv()
-    
-    # Parse arguments
+    """Command-line interface for running audits."""
     parser = argparse.ArgumentParser(
-        description="Automaton Auditor Swarm - Digital Courtroom"
+        description="Automaton Auditor Swarm - Autonomous Code Auditing",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument(
-        "--repo-url",
-        type=str,
-        required=True,
-        help="GitHub repository URL to audit"
-    )
-    parser.add_argument(
-        "--pdf-path",
-        type=str,
-        default=None,
-        help="Path to architectural report PDF"
-    )
-    parser.add_argument(
-        "--mode",
-        type=str,
-        choices=["detective", "full"],
-        default="full",
-        help="Execution mode: 'detective' (Interim) or 'full' (Final)"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Output path for Markdown report"
-    )
+    
+    parser.add_argument("--repo-url", "-r", required=True, help="GitHub repository URL to audit")
+    parser.add_argument("--pdf-path", "-p", default=None, help="Path to architectural report PDF")
+    parser.add_argument("--rubric-path", default=None, help="Path to custom rubric JSON")
+    parser.add_argument("--mode", "-m", choices=["detective", "full"], default="full", help="Audit mode")
+    parser.add_argument("--output", "-o", default=None, help="Path to save final markdown report")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     
     args = parser.parse_args()
     
     # Load rubric
-    rubric_path = os.path.join("rubric", "week2_rubric.json")
-    rubric_dimensions = []
-    
-    if os.path.exists(rubric_path):
-        import json
-        with open(rubric_path, "r", encoding="utf-8") as f:
-            rubric_data = json.load(f)
-            rubric_dimensions = rubric_data.get("dimensions", [])
-        print(f"✅ Loaded {len(rubric_dimensions)} rubric dimensions")
+    if args.rubric_path:
+        rubric_dimensions = load_rubric(args.rubric_path)
     else:
-        print("⚠️ Rubric not found - running without dimensional targeting")
+        rubric_path = Path(__file__).parent.parent / "rubric" / "week2_rubric.json"
+        rubric_dimensions = load_rubric(str(rubric_path))
     
-    # Execute audit
+    print(f"✅ Loaded {len(rubric_dimensions)} rubric dimensions")
     print(f"🚀 Starting Audit: {args.mode} mode")
     print(f"   Repository: {args.repo_url}")
-    print(f"   PDF Report: {args.pdf_path or 'Not provided'}")
-    print()
+    if args.pdf_path:
+        print(f"   PDF Report: {args.pdf_path}")
     
     try:
-        if args.mode == "detective":
-            result = run_detective_audit(
-                repo_url=args.repo_url,
-                pdf_path=args.pdf_path,
-                rubric_dimensions=rubric_dimensions
-            )
-        else:
-            result = run_full_audit(
-                repo_url=args.repo_url,
-                pdf_path=args.pdf_path,
-                rubric_dimensions=rubric_dimensions,
-                output_path=args.output
-            )
+        result = run_full_audit(
+            repo_url=args.repo_url,
+            pdf_path=args.pdf_path,
+            rubric_dimensions=rubric_dimensions,
+            mode=args.mode,
+            output_path=args.output
+        )
         
-        # Output results
-        print("✅ Audit Complete")
+        final_report = result.get("final_report", {})
+        print(f"\n✅ Audit Complete")
+        print(f"   Overall Score: {final_report.get('overall_score', 'N/A')}/5.0")
+        print(f"   Criteria Evaluated: {final_report.get('criteria_evaluated', 0)}")
         
-        if result.get("final_report"):
-            print(f"   Overall Score: {result['final_report'].overall_score}/5.0")
-            print(f"   Criteria Evaluated: {len(result['final_report'].criteria)}")
+        criteria = final_report.get("criteria", [])
+        excellent = sum(1 for c in criteria if c.get("final_score", 0) >= 5)
+        good = sum(1 for c in criteria if 3 <= c.get("final_score", 0) < 5)
+        needs_work = sum(1 for c in criteria if c.get("final_score", 0) < 3)
+        print(f"   Excellent (5): {excellent}, Good (3-4): {good}, Needs Improvement (1-2): {needs_work}")
         
-        print(f"   Errors: {len(result.get('errors', []))}")
-        
-        # Report output location
         if args.output:
             print(f"   Report saved: {args.output}")
-        else:
-            print("   Report available in result['final_report']")
         
+        overall = final_report.get("overall_score", 0)
+        if overall >= 4:
+            sys.exit(0)
+        elif overall >= 3:
+            sys.exit(1)
+        else:
+            sys.exit(2)
+            
     except Exception as e:
-        print(f"❌ Audit Failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return 1
-    
-    return 0
+        print(f"\n❌ Audit Failed: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(3)
 
 
 if __name__ == "__main__":
-    exit(main())
+    main()

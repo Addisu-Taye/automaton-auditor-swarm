@@ -1,11 +1,12 @@
 """
 api/main.py - FastAPI Backend for Automaton Auditor Swarm
+Production Module v1.0.0
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import uuid
 import os
 from pathlib import Path
@@ -28,7 +29,7 @@ app = FastAPI(
 # CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,6 +49,13 @@ class AuditResponse(BaseModel):
     status: str
     message: str
     result_url: Optional[str] = None
+
+class AuditResult(BaseModel):
+    audit_id: str
+    status: str
+    final_report: Optional[Dict[str, Any]] = None
+    report_markdown: Optional[str] = None
+    error: Optional[str] = None
 
 # =============================================================================
 # IN-MEMORY STORE (Replace with Redis/Postgres for production)
@@ -90,7 +98,7 @@ async def submit_audit(request: AuditRequest, background_tasks: BackgroundTasks)
         result_url=f"/api/audit/{audit_id}"
     )
 
-@app.get("/api/audit/{audit_id}")
+@app.get("/api/audit/{audit_id}", response_model=AuditResult)
 async def get_audit_result(audit_id: str):
     """
     Get audit status or results.
@@ -101,20 +109,27 @@ async def get_audit_result(audit_id: str):
     audit = audit_store[audit_id]
     
     if audit["status"] == "processing":
-        return {
-            "audit_id": audit_id,
-            "status": "processing",
-            "message": "Audit in progress..."
-        }
+        return AuditResult(
+            audit_id=audit_id,
+            status="processing",
+            message="Audit in progress..."
+        )
     elif audit["status"] == "failed":
-        raise HTTPException(status_code=500, detail=audit["error"])
+        return AuditResult(
+            audit_id=audit_id,
+            status="failed",
+            error=audit["error"]
+        )
     else:
         # Return completed results
-        return {
-            "audit_id": audit_id,
-            "status": "completed",
-            **audit["result"]
-        }
+        result = audit["result"]
+        return AuditResult(
+            audit_id=audit_id,
+            status="completed",
+            final_report=result.get("final_report"),
+            report_markdown=result.get("report_markdown"),
+            error=None
+        )
 
 # =============================================================================
 # BACKGROUND TASK: RUN AUDIT
@@ -123,33 +138,37 @@ async def get_audit_result(audit_id: str):
 async def run_audit_async(audit_id: str, request: AuditRequest):
     """
     Execute the audit in background and store results.
+    
+    Note: run_full_audit() already returns report_markdown, so no additional
+    serialization is needed here.
     """
     try:
         # Run your existing auditor
+        # run_full_audit already returns report_markdown in the result dict
         result = run_full_audit(
             repo_url=request.repo_url,
             pdf_path=request.pdf_path,
             rubric_dimensions=None,
-            output_path=None
+            mode=request.mode,
+            output_path=None  # Don't save to file via CLI path
         )
         
-        # Serialize report to markdown
-        from src.nodes.justice import _serialize_to_markdown
-        if result.get("final_report"):
-            result["report_markdown"] = _serialize_to_markdown(result["final_report"])
-        
         # Store completed result
+        # result already contains: final_report, report_markdown, etc.
         audit_store[audit_id].update({
             "status": "completed",
             "result": result
         })
         
+        print(f"Audit {audit_id} completed successfully")
+        
     except Exception as e:
+        error_msg = f"{type(e).__name__}: {str(e)}"
         audit_store[audit_id].update({
             "status": "failed",
-            "error": str(e)
+            "error": error_msg
         })
-        print(f"Audit {audit_id} failed: {e}")
+        print(f"Audit {audit_id} failed: {error_msg}")
         import traceback
         traceback.print_exc()
 
@@ -162,6 +181,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "api.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8001,  # Match your frontend config
         reload=os.getenv("ENV") == "development"
     )

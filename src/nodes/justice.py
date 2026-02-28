@@ -5,7 +5,7 @@ Chief Justice Synthesis Engine
 Production Module - Automaton Auditor Swarm v3.0.0
 
 Node:
-- ChiefJustice: Deterministic synthesis of judicial opinions into final report
+- chief_justice_node: Deterministic synthesis of judicial opinions into final report
 
 Compliance:
 - Protocol C.1: Deterministic Synthesis Rules (hardcoded Python logic)
@@ -14,7 +14,7 @@ Compliance:
 """
 
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 
 from src.state import JudicialOpinion, AgentState, Evidence
@@ -56,6 +56,8 @@ class SynthesisRules:
         
         # Check if any claimed feature is contradicted by repo evidence
         for claim in claimed_features:
+            if not claim:
+                continue
             evidence_contradicts = any(
                 claim.lower() in e.content.lower() and not e.found
                 for e in repo_evidence
@@ -86,124 +88,16 @@ class SynthesisRules:
 
 
 # =============================================================================
-# CHIEF JUSTICE NODE
+# HELPER FUNCTIONS (Defined before main function for proper scope)
 # =============================================================================
-
-def chief_justice(state: AgentState) -> Dict[str, Any]:
-    """
-    Synthesis Protocol: Chief Justice Final Report Generation.
-    
-    Aggregates judicial opinions using deterministic rules and generates
-    an executive-grade Markdown audit report.
-    
-    Deterministic Rules Applied:
-    1. Rule of Security: Security vulnerabilities cap scores at 3
-    2. Rule of Evidence: Factual evidence overrides optimistic claims
-    3. Rule of Functionality: Confirmed parallelism boosts architecture scores
-    4. Rule of Variance: Score divergence >2 triggers dissent summary
-    
-    Args:
-        state: AgentState with 'opinions', 'evidences', 'rubric_dimensions'
-        
-    Returns:
-        Dictionary with 'final_report' containing structured audit results
-    """
-    opinions = state.get("opinions", {})
-    evidences = state.get("evidences", {})
-    rubric_dimensions = state.get("rubric_dimensions", [])
-    repo_url = state.get("repo_url", "Unknown")
-    
-    # Collect opinions by criterion
-    criteria_opinions: Dict[str, List[JudicialOpinion]] = {}
-    
-    for judge_name, judge_opinions in opinions.items():
-        if judge_name == "aggregator":
-            continue
-        for opinion in judge_opinions:
-            cid = opinion.criterion_id
-            if cid not in criteria_opinions:
-                criteria_opinions[cid] = []
-            criteria_opinions[cid].append(opinion)
-    
-    # Synthesize final scores and reports per criterion
-    final_criteria = []
-    overall_scores = []
-    
-    for dimension in rubric_dimensions:
-        cid = dimension.get("id")
-        cname = dimension.get("name")
-        
-        judge_ops = criteria_opinions.get(cid, [])
-        if not judge_ops:
-            continue
-        
-        # Extract scores and arguments
-        scores = [op.score for op in judge_ops]
-        arguments = {op.judge: op.argument for op in judge_ops}
-        cited = {op.judge: op.cited_evidence for op in judge_ops}
-        
-        # Apply synthesis rules
-        final_score = _apply_synthesis_rules(
-            scores, arguments, cited, evidences, cid
-        )
-        overall_scores.append(final_score)
-        
-        # Check for dissent
-        dissent_summary = None
-        if SynthesisRules.rule_of_variance(scores):
-            dissent_summary = _generate_dissent_summary(judge_ops)
-        
-        # Generate remediation
-        remediation = _generate_remediation(cname, final_score, judge_ops)
-        
-        final_criteria.append({
-            "dimension_id": cid,
-            "dimension_name": cname,
-            "final_score": final_score,
-            "judge_opinions": [op.model_dump() for op in judge_ops],
-            "dissent_summary": dissent_summary,
-            "remediation": remediation
-        })
-    
-    # Calculate overall score (weighted average)
-    overall_score = sum(overall_scores) / len(overall_scores) if overall_scores else 0
-    
-    # Generate executive summary
-    executive_summary = _generate_executive_summary(
-        overall_score, len(final_criteria), final_criteria
-    )
-    
-    # Generate prioritized remediation plan
-    remediation_plan = _generate_remediation_plan(final_criteria)
-    
-    # Generate full markdown report
-    report_markdown = _serialize_to_markdown(
-        repo_url=repo_url,
-        executive_summary=executive_summary,
-        overall_score=overall_score,
-        criteria=final_criteria,
-        remediation_plan=remediation_plan
-    )
-    
-    return {
-        "final_report": {
-            "repo_url": repo_url,
-            "executive_summary": executive_summary,
-            "overall_score": round(overall_score, 2),
-            "criteria_evaluated": len(final_criteria),
-            "criteria": final_criteria,
-            "remediation_plan": remediation_plan
-        },
-        "report_markdown": report_markdown
-    }
-
 
 def _apply_synthesis_rules(
     scores: List[int],
     arguments: Dict[str, str],
     cited: Dict[str, List[str]],
     evidences: Dict[str, List[Evidence]],
-    criterion_id: str
+    criterion_id: str,
+    judge_ops: List[JudicialOpinion]  # Added parameter to fix scope issue
 ) -> int:
     """Apply deterministic synthesis rules to determine final score."""
     
@@ -241,7 +135,12 @@ def _apply_synthesis_rules(
             "Parallel: True" in e.content or "parallel_detected" in e.content.lower()
             for e in repo_evidence
         )
-        techlead_score = scores[criteria_opinions.index(arguments.get("TechLead", ""))] if "TechLead" in arguments else base_score
+        # Get TechLead score safely
+        techlead_score = base_score
+        for op in judge_ops:
+            if op.judge == "TechLead":
+                techlead_score = op.score
+                break
         base_score = SynthesisRules.rule_of_functionality(base_score, parallel_evidence)
     
     # Rule 4: Variance-based adjustment (minor)
@@ -255,6 +154,9 @@ def _apply_synthesis_rules(
 def _generate_dissent_summary(opinions: List[JudicialOpinion]) -> str:
     """Generate summary when judge scores diverge significantly."""
     scores = {op.judge: op.score for op in opinions}
+    if not scores:
+        return "No judge opinions available for dissent analysis."
+    
     max_judge = max(scores, key=scores.get)
     min_judge = min(scores, key=scores.get)
     
@@ -281,7 +183,7 @@ def _generate_remediation(
         # Extract common themes from low-scoring opinions
         concerns = [
             op.argument for op in opinions 
-            if op.score <= 2 and "missing" in op.argument.lower() or "lack" in op.argument.lower()
+            if op.score <= 2 and ("missing" in op.argument.lower() or "lack" in op.argument.lower())
         ]
         if concerns:
             return f"❌ Critical: {concerns[0][:200]}... Prioritize addressing this before production deployment."
@@ -376,13 +278,126 @@ def _serialize_to_markdown(
     lines.append("## Remediation Plan\n")
     lines.append(remediation_plan)
     
-    # Add footer
+    # Add footer with UTC timestamp
     lines.extend([
         "",
         "---",
         f"*Report generated by Automaton Auditor Swarm v3.0.0*",
-        f"*Timestamp: {datetime.utcnow().isoformat()}Z*",
+        f"*Timestamp: {datetime.now(timezone.utc).isoformat()}",
         f"*Methodology: Dialectical synthesis via Prosecutor/Defense/TechLead personas*"
     ])
     
     return "\n".join(lines)
+
+
+# =============================================================================
+# CHIEF JUSTICE NODE (Main Entry Point - Renamed to match graph.py imports)
+# =============================================================================
+
+def chief_justice_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Synthesis Protocol: Chief Justice Final Report Generation.
+    
+    Aggregates judicial opinions using deterministic rules and generates
+    an executive-grade Markdown audit report.
+    
+    Deterministic Rules Applied:
+    1. Rule of Security: Security vulnerabilities cap scores at 3
+    2. Rule of Evidence: Factual evidence overrides optimistic claims
+    3. Rule of Functionality: Confirmed parallelism boosts architecture scores
+    4. Rule of Variance: Score divergence >2 triggers dissent summary
+    
+    Args:
+        state: AgentState with 'opinions', 'evidences', 'rubric_dimensions'
+        
+    Returns:
+        Dictionary with 'final_report' containing structured audit results
+    """
+    opinions = state.get("opinions", {})
+    evidences = state.get("evidences", {})
+    rubric_dimensions = state.get("rubric_dimensions", [])
+    repo_url = state.get("repo_url", "Unknown")
+    
+    # Collect opinions by criterion
+    criteria_opinions: Dict[str, List[JudicialOpinion]] = {}
+    
+    for judge_name, judge_opinions in opinions.items():
+        if judge_name == "aggregator":
+            continue
+        for opinion in judge_opinions:
+            cid = opinion.criterion_id
+            if cid not in criteria_opinions:
+                criteria_opinions[cid] = []
+            criteria_opinions[cid].append(opinion)
+    
+    # Synthesize final scores and reports per criterion
+    final_criteria = []
+    overall_scores = []
+    
+    for dimension in rubric_dimensions:
+        cid = dimension.get("id")
+        cname = dimension.get("name")
+        
+        judge_ops = criteria_opinions.get(cid, [])
+        if not judge_ops:
+            continue
+        
+        # Extract scores and arguments
+        scores = [op.score for op in judge_ops]
+        arguments = {op.judge: op.argument for op in judge_ops}
+        cited = {op.judge: op.cited_evidence for op in judge_ops}
+        
+        # Apply synthesis rules (pass judge_ops to fix scope issue)
+        final_score = _apply_synthesis_rules(
+            scores, arguments, cited, evidences, cid, judge_ops
+        )
+        overall_scores.append(final_score)
+        
+        # Check for dissent
+        dissent_summary = None
+        if SynthesisRules.rule_of_variance(scores):
+            dissent_summary = _generate_dissent_summary(judge_ops)
+        
+        # Generate remediation
+        remediation = _generate_remediation(cname, final_score, judge_ops)
+        
+        final_criteria.append({
+            "dimension_id": cid,
+            "dimension_name": cname,
+            "final_score": final_score,
+            "judge_opinions": [op.model_dump() for op in judge_ops],
+            "dissent_summary": dissent_summary,
+            "remediation": remediation
+        })
+    
+    # Calculate overall score (weighted average)
+    overall_score = sum(overall_scores) / len(overall_scores) if overall_scores else 0
+    
+    # Generate executive summary
+    executive_summary = _generate_executive_summary(
+        overall_score, len(final_criteria), final_criteria
+    )
+    
+    # Generate prioritized remediation plan
+    remediation_plan = _generate_remediation_plan(final_criteria)
+    
+    # Generate full markdown report
+    report_markdown = _serialize_to_markdown(
+        repo_url=repo_url,
+        executive_summary=executive_summary,
+        overall_score=overall_score,
+        criteria=final_criteria,
+        remediation_plan=remediation_plan
+    )
+    
+    return {
+        "final_report": {
+            "repo_url": repo_url,
+            "executive_summary": executive_summary,
+            "overall_score": round(overall_score, 2),
+            "criteria_evaluated": len(final_criteria),
+            "criteria": final_criteria,
+            "remediation_plan": remediation_plan
+        },
+        "report_markdown": report_markdown
+    }

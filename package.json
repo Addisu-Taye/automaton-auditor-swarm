@@ -1,0 +1,23 @@
+{
+  "name": "automaton-auditor-swarm",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:backend": "cd api && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build:backend": "echo 'Backend uses uv install'",
+    "build:frontend": "cd frontend && npm run build",
+    "build": "npm run build:frontend",
+    "docker:build": "docker compose -f docker/docker-compose.yml build",
+    "docker:up": "docker compose -f docker/docker-compose.yml up -d",
+    "docker:down": "docker compose -f docker/docker-compose.yml down",
+    "docker:logs": "docker compose -f docker/docker-compose.yml logs -f",
+    "test": "cd src && python -m pytest",
+    "lint:python": "ruff check src/ api/",
+    "lint:ts": "cd frontend && npm run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -1,131 +1,218 @@
 """
 src/state.py
 
-Pydantic State Definitions for Automaton Auditor Swarm
-Production Module - v3.0.0
+Central State Management for Automaton Auditor Swarm
+Production Module v3.0.0
 
 Compliance:
-- Protocol A.2: State Management Rigor
-- Protocol A.5: Structured Output Enforcement
+- Protocol S.1: Pydantic BaseModel for structured data
+- Protocol S.2: Annotated[...] with reducers for parallel execution
+- Protocol S.3: Immutable evidence collection pattern
 """
 
-import operator
-from typing import Annotated, Dict, List, Literal, Optional
+from typing import Dict, List, Optional, Annotated, Any, TypedDict
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+import operator
+from datetime import datetime, timezone
 
 
 # =============================================================================
-# DETECTIVE OUTPUT: EVIDENCE
+# EVIDENCE SCHEMA (Immutable Forensic Record)
 # =============================================================================
 
 class Evidence(BaseModel):
     """
-    Structured evidence collected by Detective agents.
-    Immutable facts only - no opinions or judgments.
+    Immutable record of forensic evidence collected by Detective nodes.
     
-    Compliance: Protocol A (Forensic Evidence Collection Standards)
+    Each piece of evidence is:
+    - Traceable: Links to specific goal/rubric dimension
+    - Verifiable: Contains confidence score and rationale
+    - Citable: References specific artifact locations
     """
-    goal: str = Field(description="Rubric dimension ID this evidence addresses")
-    found: bool = Field(description="Whether the artifact exists")
-    content: Optional[str] = Field(default=None, description="Evidence content or snippet")
-    location: str = Field(description="File path, commit hash, or page number")
-    rationale: str = Field(description="Rationale for confidence assessment")
-    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
-    artifact_type: str = Field(description="Type: git_history, ast_analysis, document, etc.")
+    
+    goal: str = Field(..., description="Rubric dimension ID this evidence supports")
+    found: bool = Field(..., description="Whether the expected artifact was found")
+    content: str = Field(..., description="Detailed description of the evidence")
+    location: str = Field(..., description="File path, URL, or artifact location")
+    rationale: str = Field(..., description="Reasoning behind the finding")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
+    artifact_type: str = Field(..., description="Type: git_clone, ast_analysis, document, etc.")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="When evidence was collected")
+    
+    class Config:
+        frozen = True  # Immutable after creation
 
 
 # =============================================================================
-# JUDGE OUTPUT: JUDICIAL OPINION
+# JUDICIAL OPINION SCHEMA (Structured Judge Output)
 # =============================================================================
 
 class JudicialOpinion(BaseModel):
     """
-    Structured opinion from a Judge persona.
-    Must be validated via .with_structured_output().
+    Structured output from Judicial nodes (Prosecutor, Defense, TechLead).
     
-    Compliance: Protocol A.5 (Structured Output Enforcement)
+    Each opinion is:
+    - Scored: 1-5 integer score per rubric dimension
+    - Argued: Detailed reasoning for the score
+    - Cited: References to specific evidence supporting the argument
     """
-    judge: Literal["Prosecutor", "Defense", "TechLead"]
-    criterion_id: str = Field(description="Rubric dimension ID being evaluated")
-    score: int = Field(ge=1, le=5, description="Score 1-5 per rubric")
-    argument: str = Field(description="Reasoning for the score")
-    cited_evidence: List[str] = Field(description="List of evidence locations cited")
+    
+    judge: str = Field(..., description="Judge persona: Prosecutor, Defense, or TechLead")
+    criterion_id: str = Field(..., description="Rubric dimension ID being evaluated")
+    score: int = Field(..., ge=1, le=5, description="Score from 1-5")
+    argument: str = Field(..., description="Detailed argument supporting the score")
+    cited_evidence: List[str] = Field(default_factory=list, description="Evidence locations cited")
+    
+    class Config:
+        frozen = True  # Immutable after creation
 
 
 # =============================================================================
-# CHIEF JUSTICE OUTPUT: CRITERION RESULT & AUDIT REPORT
+# AUDIT REPORT SCHEMA (Final Output)
 # =============================================================================
-
-class CriterionResult(BaseModel):
-    """
-    Final result for a single rubric dimension after synthesis.
-    
-    Compliance: Protocol B (Judicial Sentencing Guidelines)
-    """
-    dimension_id: str
-    dimension_name: str
-    final_score: int = Field(ge=1, le=5)
-    judge_opinions: List[JudicialOpinion]
-    dissent_summary: Optional[str] = Field(
-        default=None,
-        description="Required when score variance > 2"
-    )
-    remediation: str = Field(
-        description="Specific file-level instructions for improvement"
-    )
-
 
 class AuditReport(BaseModel):
     """
-    Final production-grade audit report.
-    Serialized to Markdown for output.
+    Structured audit report output from ChiefJustice synthesis.
     
-    Compliance: Executive Grade Report Quality requirement
+    Used for API response serialization and report generation.
     """
-    repo_url: str
-    executive_summary: str
-    overall_score: float = Field(ge=1.0, le=5.0)
-    criteria: List[CriterionResult]
-    remediation_plan: str
+    repo_url: str = Field(..., description="Audited repository URL")
+    overall_score: float = Field(..., ge=0.0, le=5.0, description="Overall score 0.0-5.0")
+    criteria_evaluated: int = Field(..., ge=0, description="Number of criteria evaluated")
+    executive_summary: str = Field(..., description="Executive summary text")
+    criteria: List[Dict[str, Any]] = Field(default_factory=list, description="Per-criterion results")
+    remediation_plan: str = Field(..., description="Prioritized remediation plan")
+    report_markdown: str = Field(..., description="Full markdown report")
+    
+    class Config:
+        arbitrary_types_allowed = True
 
 
 # =============================================================================
-# GRAPH STATE: AGENTSTATE
+# AGENT STATE (Central State Container)
 # =============================================================================
 
 class AgentState(TypedDict):
     """
-    Master State Graph Schema for LangGraph.
+    Central state container for the Automaton Auditor Swarm.
     
-    Uses Annotated reducers to handle parallel execution safely:
-    - operator.ior: Dict merge for evidences (prevents overwrite)
-    - operator.add: List append for opinions and errors (accumulates all values)
+    Uses Annotated[...] with reducers for proper parallel execution:
+    - operator.ior (|) for dict merging: {**a, **b}
+    - operator.add (+) for list concatenation: a + b
     
-    Compliance: Protocol A.2 (State Management Rigor)
+    State fields are updated by nodes returning partial dicts, which are
+    merged using the specified reducer. This enables safe parallel execution.
     """
-    # Input parameters
-    repo_url: str
-    pdf_path: str
-    rubric_dimensions: List[Dict]
     
-    # Evidence collection (Dict merge reducer)
-    evidences: Annotated[
-        Dict[str, List[Evidence]],
-        operator.ior  # Dict merge: prevents parallel agents from overwriting
-    ]
+    # =====================================================================
+    # INPUT PARAMETERS (Set at graph start, not modified by nodes)
+    # =====================================================================
     
-    # Judicial opinions (List append reducer)
-    opinions: Annotated[
-        List[JudicialOpinion],
-        operator.add  # List append: accumulates all judge perspectives
-    ]
+    repo_url: Optional[str]
+    """GitHub repository URL to audit"""
     
-    # Final output
-    final_report: Optional[AuditReport]
+    pdf_path: Optional[str]
+    """Path to architectural report PDF for cross-reference"""
     
-    # Error tracking (List append reducer) - FIX: Added reducer for parallel writes
-    errors: Annotated[
-        List[str],
-        operator.add  # List append: accumulates errors from all parallel nodes
-    ]
+    rubric_dimensions: Optional[List[Dict]]
+    """Machine-readable rubric dimensions (loaded from JSON)"""
+    
+    mode: str
+    """Audit mode: 'detective' (interim) or 'full' (final)"""
+    
+    output_path: Optional[str]
+    """Path to save final markdown report"""
+    
+    # =====================================================================
+    # ACCUMULATED EVIDENCE (Dict reducer: operator.ior for merging)
+    # =====================================================================
+    
+    evidences: Annotated[Dict[str, List[Evidence]], operator.ior]
+    """
+    Collected evidence organized by detective node:
+    {
+        "repo_investigator": [Evidence(...), ...],
+        "doc_analyst": [Evidence(...), ...],
+        "vision_inspector": [Evidence(...), ...],
+        "evidence_aggregator": [Evidence(...), ...]
+    }
+    
+    Reducer: operator.ior (|) merges dicts: {**a, **b}
+    """
+    
+    # =====================================================================
+    # ACCUMULATED OPINIONS (Dict reducer: operator.ior for merging)
+    # =====================================================================
+    
+    opinions: Annotated[Dict[str, List[JudicialOpinion]], operator.ior]
+    """
+    Judicial opinions organized by judge node:
+    {
+        "prosecutor": [JudicialOpinion(...), ...],
+        "defense": [JudicialOpinion(...), ...],
+        "techlead": [JudicialOpinion(...), ...],
+        "aggregator": [JudicialOpinion(...), ...]
+    }
+    
+    Reducer: operator.ior (|) merges dicts: {**a, **b}
+    """
+    
+    # =====================================================================
+    # ERROR TRACKING (List reducer: operator.add for concatenation)
+    # =====================================================================
+    
+    errors: Annotated[List[str], operator.add]
+    """
+    Accumulated error messages from all nodes.
+    
+    Reducer: operator.add (+) concatenates lists: a + b
+    """
+    
+    # =====================================================================
+    # FINAL OUTPUT (Set by ChiefJustice, not modified)
+    # =====================================================================
+    
+    final_report: Optional[Dict]
+    """Structured final report from ChiefJustice synthesis"""
+    
+    report_markdown: Optional[str]
+    """Serialized markdown report for output"""
+
+
+# =============================================================================
+# STATE UTILITIES
+# =============================================================================
+
+def create_initial_state(
+    repo_url: str,
+    pdf_path: Optional[str] = None,
+    rubric_dimensions: Optional[List[Dict]] = None,
+    mode: str = "full",
+    output_path: Optional[str] = None
+) -> AgentState:
+    """
+    Create a new AgentState with initial input parameters.
+    
+    Args:
+        repo_url: GitHub repository URL to audit
+        pdf_path: Optional path to architectural report PDF
+        rubric_dimensions: Optional list of rubric dimension dicts
+        mode: Audit mode ('detective' or 'full')
+        output_path: Optional path to save final report
+        
+    Returns:
+        AgentState with input parameters and empty accumulators
+    """
+    return AgentState(
+        repo_url=repo_url,
+        pdf_path=pdf_path,
+        rubric_dimensions=rubric_dimensions,
+        mode=mode,
+        output_path=output_path,
+        evidences={},  # Start with empty dict for merging
+        opinions={},   # Start with empty dict for merging
+        errors=[],     # Start with empty list for concatenation
+        final_report=None,
+        report_markdown=None
+    )

@@ -44,7 +44,7 @@ from src.tools.doc_tools import (
 # REPO INVESTIGATOR (The Code Detective)
 # =============================================================================
 
-def repo_investigator(state: AgentState) -> Dict[str, List[Evidence]]:
+def repo_investigator(state: AgentState) -> Dict[str, Any]:
     """
     Forensic Protocol: Code Repository Investigation.
     
@@ -61,7 +61,11 @@ def repo_investigator(state: AgentState) -> Dict[str, List[Evidence]]:
         state: AgentState containing repo_url and other context
         
     Returns:
-        Dictionary with 'evidences' key containing list of Evidence objects
+        Dictionary with partial state updates for LangGraph reduction:
+        {
+            "evidences": {"repo_investigator": [Evidence(...), ...]},  # Dict reducer: operator.ior
+            "errors": [...]  # List reducer: operator.add
+        }
     """
     repo_url = state.get("repo_url")
     evidences: List[Evidence] = []
@@ -69,6 +73,7 @@ def repo_investigator(state: AgentState) -> Dict[str, List[Evidence]]:
     
     if not repo_url:
         errors.append("No repo_url provided in state")
+        # Return proper structure for LangGraph state reduction
         return {"evidences": {"repo_investigator": []}, "errors": errors}
     
     temp_path: Optional[str] = None
@@ -220,7 +225,7 @@ def repo_investigator(state: AgentState) -> Dict[str, List[Evidence]]:
                 content="graph.py not found after exhaustive search (direct + normalized + glob)",
                 location="src/",
                 rationale="Graph definition file genuinely missing from repository",
-                confidence=0.9,  # High confidence in negative result
+                confidence=0.9,
                 artifact_type="file_check"
             ))
         
@@ -256,6 +261,9 @@ def repo_investigator(state: AgentState) -> Dict[str, List[Evidence]]:
             artifact_type="file_inventory"
         ))
         
+        # CRITICAL: Return structure must match LangGraph state reducer expectations
+        # - "evidences" value must be Dict[str, List[Evidence]] for operator.ior merging
+        # - "errors" value must be List[str] for operator.add concatenation
         return {"evidences": {"repo_investigator": evidences}, "errors": errors}
         
     except Exception as e:
@@ -270,7 +278,7 @@ def repo_investigator(state: AgentState) -> Dict[str, List[Evidence]]:
 # DOC ANALYST (The Paperwork Detective)
 # =============================================================================
 
-def doc_analyst(state: AgentState) -> Dict[str, List[Evidence]]:
+def doc_analyst(state: AgentState) -> Dict[str, Any]:
     """
     Forensic Protocol: PDF Report Analysis.
     
@@ -283,7 +291,11 @@ def doc_analyst(state: AgentState) -> Dict[str, List[Evidence]]:
         state: AgentState containing pdf_path
         
     Returns:
-        Dictionary with 'evidences' key containing list of Evidence objects
+        Dictionary with partial state updates for LangGraph reduction:
+        {
+            "evidences": {"doc_analyst": [Evidence(...), ...]},
+            "errors": [...]
+        }
     """
     pdf_path = state.get("pdf_path")
     evidences: List[Evidence] = []
@@ -377,9 +389,6 @@ def doc_analyst(state: AgentState) -> Dict[str, List[Evidence]]:
                 confidence=0.95,
                 artifact_type="document_analysis"
             ))
-            
-            # Store extracted paths in state for cross-reference (optional)
-            # This would require state modification to store claimed_paths
         else:
             evidences.append(Evidence(
                 goal="report_accuracy",
@@ -391,18 +400,19 @@ def doc_analyst(state: AgentState) -> Dict[str, List[Evidence]]:
                 artifact_type="document_analysis"
             ))
         
+        # CRITICAL: Return structure must match LangGraph state reducer expectations
         return {"evidences": {"doc_analyst": evidences}, "errors": errors}
         
     except Exception as e:
         errors.append(f"DocAnalyst failed: {str(e)}")
-        return {"evidences": {"doc_analyst": evidences}, "errors": errors}
+        return {"evidences": {"doc_analyst": []}, "errors": errors}
 
 
 # =============================================================================
 # VISION INSPECTOR (The Diagram Detective)
 # =============================================================================
 
-def vision_inspector(state: AgentState) -> Dict[str, List[Evidence]]:
+def vision_inspector(state: AgentState) -> Dict[str, Any]:
     """
     Forensic Protocol: Architectural Diagram Analysis.
     
@@ -417,14 +427,15 @@ def vision_inspector(state: AgentState) -> Dict[str, List[Evidence]]:
         state: AgentState containing pdf_path
         
     Returns:
-        Dictionary with 'evidences' key containing list of Evidence objects
+        Dictionary with partial state updates for LangGraph reduction:
+        {
+            "evidences": {"vision_inspector": [Evidence(...), ...]},
+            "errors": [...]
+        }
     """
     pdf_path = state.get("pdf_path")
     evidences: List[Evidence] = []
     errors: List[str] = []
-    
-    # Note: Full implementation requires multimodal LLM integration
-    # This is a placeholder that meets the "implementation required, execution optional" spec
     
     if not pdf_path:
         evidences.append(Evidence(
@@ -439,11 +450,7 @@ def vision_inspector(state: AgentState) -> Dict[str, List[Evidence]]:
         return {"evidences": {"vision_inspector": evidences}, "errors": errors}
     
     try:
-        # Placeholder: In production, this would:
-        # 1. Extract images from PDF using pdfplumber or pymupdf
-        # 2. Send images to multimodal LLM (GPT-4o, Gemini)
-        # 3. Classify diagram type and verify parallel flow visualization
-        
+        # Placeholder: In production, this would extract and analyze diagrams
         evidences.append(Evidence(
             goal="swarm_visual",
             found=False,
@@ -454,6 +461,7 @@ def vision_inspector(state: AgentState) -> Dict[str, List[Evidence]]:
             artifact_type="diagram"
         ))
         
+        # CRITICAL: Return structure must match LangGraph state reducer expectations
         return {"evidences": {"vision_inspector": evidences}, "errors": errors}
         
     except Exception as e:
@@ -476,12 +484,16 @@ def evidence_aggregator(state: AgentState) -> Dict[str, Any]:
         state: AgentState with accumulated evidence from all detectives
         
     Returns:
-        State with validation metadata
+        Dictionary with partial state updates for LangGraph reduction:
+        {
+            "evidences": {"evidence_aggregator": [Evidence(...)]},
+            "errors": [...]
+        }
     """
     evidences = state.get("evidences", {})
     errors = state.get("errors", [])
     
-    # Count evidence by detective
+    # Count evidence by detective source
     evidence_counts = {
         detective: len(evidence_list)
         for detective, evidence_list in evidences.items()
@@ -496,7 +508,7 @@ def evidence_aggregator(state: AgentState) -> Dict[str, Any]:
     
     total_evidence = sum(evidence_counts.values())
     
-    # Add aggregation metadata
+    # Add aggregation metadata evidence
     aggregator_evidence = [Evidence(
         goal="evidence_aggregation",
         found=total_evidence > 0,
@@ -507,6 +519,7 @@ def evidence_aggregator(state: AgentState) -> Dict[str, Any]:
         artifact_type="aggregation"
     )]
     
+    # CRITICAL: Return structure must match LangGraph state reducer expectations
     return {
         "evidences": {"evidence_aggregator": aggregator_evidence},
         "errors": errors
